@@ -523,7 +523,7 @@ const Header = () => {
             React.createElement("div", { className: "flex items-center space-x-1 sm:space-x-4 ml-2 sm:ml-4" },
                 React.createElement("div", { className: "rounded-full embedded-shadow flex-shrink-0" },
                     React.createElement("img", {
-                        src: "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExMWx6eG0zcjIxY2xqczQ3NDdzdWg1NnBuZjJsY3Z0aG53djI3bmtyciZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/eRlCNIpfGdPdub57JI/giphy.gif",
+                        src: "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExNXRlNWZpNWQwajl5dnMzbnFieGJ6bmZpOW54NGg5YmFxY3NhbHQwbiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/eRlCNIpfGdPdub57JI/giphy.gif",
                         alt: "OGM Logo",
                         className: "h-14 w-14 sm:h-28 sm:w-28 rounded-full object-cover"
                     })
@@ -627,6 +627,9 @@ const FuelEntryForm = ({ personnelList, aircraftData, tankerData, airportList, o
         if (isManualPersonnelEntry) return null;
         return personnelList.find(p => p.id === formData.personnelId);
     }, [formData.personnelId, personnelList, isManualPersonnelEntry]);
+
+    const personnelCompany = (isManualPersonnelEntry ? manualPersonnel.company : selectedPersonnelObject?.company || "").toLowerCase().trim();
+    const isPersonnelOGM = personnelCompany.includes('ogm') || personnelCompany.includes('orman');
 
     const showReceiptTypeSelection = useMemo(() => {
         if (entryType !== 'personnel') return false;
@@ -759,17 +762,14 @@ const FuelEntryForm = ({ personnelList, aircraftData, tankerData, airportList, o
         let redirectUrl = '';
         const kayitNumarasi = generateRecordNumber();
 
+        const ogmKurumMakbuzUrl = "https://bulut.ogm.gov.tr/OGMKURUMMAKBUZ";
+        const ogmKiralikHavaMakbuzUrl = "https://bulut.ogm.gov.tr/OGMKIRALIKHAVAMAKBUZ";
+        const kiralikTankerUrl = "https://bulut.ogm.gov.tr/KIRALIKTANKER";
         const ogmUrl = "https://bulut.ogm.gov.tr/OGMKURUMMAKBUZ";
         const rentalAircraftUrl = "https://bulut.ogm.gov.tr/OGMKIRALIKHAVAMAKBUZ";
         const rentalTankerUrl = "https://bulut.ogm.gov.tr/KIRALIKTANKER";
 
-        const ogmKurumMakbuzUrl = "https://bulut.ogm.gov.tr/OGMKURUMMAKBUZ";
-        const ogmKiralikHavaMakbuzUrl = "https://bulut.ogm.gov.tr/OGMKIRALIKHAVAMAKBUZ";
-        const kiralikTankerUrl = "https://bulut.ogm.gov.tr/KIRALIKTANKER";
-
         const finalJobTitleForSubmit = isManualPersonnelEntry ? manualPersonnel.job : formData.jobTitle;
-        const personnelCompany = (isManualPersonnelEntry ? manualPersonnel.company : selectedPersonnelObject?.company || "").toLowerCase().trim();
-        const isPersonnelOGM = personnelCompany.includes('ogm') || personnelCompany.includes('orman');
 
         if (entryType === 'personnel') {
             let formattedReceiptNumber = formData.receiptNumber;
@@ -802,15 +802,27 @@ const FuelEntryForm = ({ personnelList, aircraftData, tankerData, airportList, o
             const isPilotOrTech = finalJobTitleForSubmit === 'Pilot' || finalJobTitleForSubmit === 'Uçuş Teknisyeni';
             const isDriver = finalJobTitleForSubmit === 'Şoför';
 
-            // New redirection logic for personnel entries
-            if (isDriver && isPersonnelOGM) {
-                redirectUrl = ogmKurumMakbuzUrl;
-            } else if (isPilotOrTech && (!isPersonnelOGM || !isAircraftOGM)) {
-                redirectUrl = ogmKiralikHavaMakbuzUrl;
-            } else if (isAircraftOGM) {
-                redirectUrl = ogmUrl;
+            // Decision Tree logic
+            const isAnyOGM = isPersonnelOGM || isAircraftOGM;
+
+            if (isAnyOGM) {
+                // Rule 1: OGM Case
+                if (isDriver && isPersonnelOGM) {
+                    redirectUrl = ogmKurumMakbuzUrl;
+                } else if (isAircraftOGM) {
+                    redirectUrl = ogmUrl;
+                } else {
+                    redirectUrl = rentalAircraftUrl;
+                }
             } else {
-                redirectUrl = rentalAircraftUrl;
+                // Rule 2: Non-OGM (Rental)
+                if (selectedAirport && selectedAirport.type === 'Askeri') {
+                    // Rule 2.1
+                    redirectUrl = "https://bulut.ogm.gov.tr/kiralikaskeri";
+                } else {
+                    // Rule 2.2
+                    redirectUrl = "https://bulut.ogm.gov.tr/OGMKIRALIKHAVAMAKBUZ";
+                }
             }
 
             let finalPersonnelData = {
@@ -976,14 +988,17 @@ const FuelEntryForm = ({ personnelList, aircraftData, tankerData, airportList, o
                             placeholder: "Tanker Plakası Seçiniz veya Arayınız"
                         })
                     ),
-                    formData.locationType === 'Hava Limanı/Alanı' && React.createElement("div", { className: "form-group" },
-                        React.createElement("label", { className: "font-semibold text-slate-600 mb-2 block" }, "Konum (Hava Limanı/Alanı):"),
-                        React.createElement(AutocompleteSelect, {
-                            options: airportList.map(airport => ({ value: airport.name, label: airport.name })),
-                            value: formData.location,
-                            onChange: (value) => handleGenericSelect('location', value),
-                            placeholder: "Havalimanı Seçiniz veya Arayınız"
-                        })
+                    formData.locationType === 'Hava Limanı/Alanı' && React.createElement(React.Fragment, null,
+                        !isPersonnelOGM && React.createElement("p", { className: "text-red-600 font-semibold text-xs mb-2 p-2 bg-red-50 border border-red-200 rounded-lg" }, "Lütfen karşınızdaki ikmal personeli \"Askeri Personel\" ise hava limanı seçiminde parantez içinde (Askeri) yazdığından mutlaka emin olunuz. Eğer emin değilseniz ya da mevcut askeri hava limanı listede yok ise yöneticinize bildiriniz."),
+                        React.createElement("div", { className: "form-group" },
+                            React.createElement("label", { className: "font-semibold text-slate-600 mb-2 block" }, "Konum (Hava Limanı/Alanı):"),
+                            React.createElement(AutocompleteSelect, {
+                                options: airportList.map(airport => ({ value: airport.name, label: airport.name })),
+                                value: formData.location,
+                                onChange: (value) => handleGenericSelect('location', value),
+                                placeholder: "Havalimanı Seçiniz veya Arayınız"
+                            })
+                        )
                     ));
             case 3:
                 if (!isMilitaryLocation) return null;
@@ -1069,11 +1084,9 @@ const FuelEntryForm = ({ personnelList, aircraftData, tankerData, airportList, o
                     )
                 );
             case 3:
-                return React.createElement("div", { className: "space-y-4" },
-                    React.createElement("div", { className: "form-group" },
-                        React.createElement("label", { className: "font-semibold text-slate-600 mb-2 block" }, "Makbuz Numarası:"),
-                        React.createElement(InputField, { type: "text", name: "receiptNumber", value: formData.receiptNumber, onChange: handleChange, placeholder: "Örn: 123456789", required: true })
-                    )
+                return React.createElement("div", { className: "form-group" },
+                    React.createElement("label", { className: "font-semibold text-slate-600 mb-2 block" }, "Makbuz Numarası:"),
+                    React.createElement(InputField, { type: "text", name: "receiptNumber", value: formData.receiptNumber, onChange: handleChange, placeholder: "Örn: 123456789", required: true })
                 );
             case 4:
                 return React.createElement("div", { className: "space-y-4" },
@@ -1119,11 +1132,9 @@ const FuelEntryForm = ({ personnelList, aircraftData, tankerData, airportList, o
                     )
                 );
             case 3:
-                return React.createElement("div", { className: "space-y-4" },
-                    React.createElement("div", { className: "form-group" },
-                        React.createElement("label", { className: "font-semibold text-slate-600 mb-2 block" }, "Makbuz Numarası:"),
-                        React.createElement(InputField, { type: "text", name: "receiptNumber", value: formData.receiptNumber, onChange: handleChange, placeholder: "Örn: 123456789", required: true })
-                    )
+                return React.createElement("div", { className: "form-group" },
+                    React.createElement("label", { className: "font-semibold text-slate-600 mb-2 block" }, "Makbuz Numarası:"),
+                    React.createElement(InputField, { type: "text", name: "receiptNumber", value: formData.receiptNumber, onChange: handleChange, placeholder: "Örn: 123456789", required: true })
                 );
             case 4:
                 return React.createElement("div", { className: "space-y-4" },
@@ -2465,11 +2476,11 @@ const RecordManagement = ({ fuelRecords, onUpdateFuelRecords, aircraftData, tank
                     React.createElement("input", { type: "date", name: "startDate", value: filters.startDate, onChange: handleFilterChange, className: "w-full p-2 border border-slate-300 rounded-md" }),
                     React.createElement("input", { type: "date", name: "endDate", value: filters.endDate, onChange: handleFilterChange, className: "w-full p-2 border border-slate-300 rounded-md" }),
                     React.createElement("input", { type: "text", name: "receiptNumber", value: filters.receiptNumber, onChange: handleFilterChange, className: "w-full p-2 border border-slate-300 rounded-md", placeholder: "Makbuz No Girin" }),
-                    React.createElement(AutocompleteSelect, { options: filterOptions.tankerPlates.map(p => ({ value: p, label: p })), value: filters.tankerPlate, onChange: (v) => handleFilterChange({target:{name:'tankerPlate',value:v}}), placeholder: "Plaka Filtrele", className: "w-full p-2 border border-slate-300 rounded-md" }),
-                    React.createElement(AutocompleteSelect, { options: filterOptions.airports.map(a => ({ value: a.name, label: a.name })), value: filters.airport, onChange: (v) => handleFilterChange({target:{name:'airport',value:v}}), placeholder: "Hava Limanı Filtrele", className: "w-full p-2 border border-slate-300 rounded-md" }),
-                    React.createElement(AutocompleteSelect, { options: filterOptions.tailNumbers.map(tn => ({ value: tn, label: tn })), value: filters.tailNumber, onChange: (v) => handleFilterChange({target:{name:'tailNumber',value:v}}), placeholder: "Kuyruk No Filtrele", className: "w-full p-2 border border-slate-300 rounded-md" }),
+                    React.createElement(AutocompleteSelect, { options: filterOptions.tankerPlates.map(p => ({ value: p.label, label: p.label })), value: filters.tankerPlate, onChange: (v) => handleFilterChange({target:{name:'tankerPlate',value:v}}), placeholder: "Plaka Filtrele", className: "w-full p-2 border border-slate-300 rounded-md" }),
+                    React.createElement(AutocompleteSelect, { options: filterOptions.airports.map(a => ({ value: a.label, label: a.label })), value: filters.airport, onChange: (v) => handleFilterChange({target:{name:'airport',value:v}}), placeholder: "Hava Limanı Filtrele", className: "w-full p-2 border border-slate-300 rounded-md" }),
+                    React.createElement(AutocompleteSelect, { options: filterOptions.tailNumbers.map(tn => ({ value: tn.label, label: tn.label })), value: filters.tailNumber, onChange: (v) => handleFilterChange({target:{name:'tailNumber',value:v}}), placeholder: "Kuyruk No Filtrele", className: "w-full p-2 border border-slate-300 rounded-md" }),
                     React.createElement(AutocompleteSelect, { options: filterOptions.aircraftTypes.map(t => ({ value: t.label, label: t.label })), value: filters.aircraftType, onChange: (v) => handleFilterChange({target:{name:'aircraftType',value:v}}), placeholder: "Tip Filtrele", className: "w-full p-2 border border-slate-300 rounded-md" }),
-                    React.createElement(AutocompleteSelect, { options: filterOptions.companies.map(c => ({ value: c, label: c })), value: filters.company, onChange: (v) => handleFilterChange({target:{name:'company',value:v}}), placeholder: "Firma Filtrele", className: "w-full p-2 border border-slate-300 rounded-md" })
+                    React.createElement(AutocompleteSelect, { options: filterOptions.companies.map(c => ({ value: c.label, label: c.label })), value: filters.company, onChange: (v) => handleFilterChange({target:{name:'company',value:v}}), placeholder: "Firma Filtrele", className: "w-full p-2 border border-slate-300 rounded-md" })
                 ),
                 React.createElement("div", { className: "pt-4" },
                      React.createElement("button", { onClick: handleSearch, className: "py-2 px-5 bg-ogm-green-600 text-white rounded-lg font-semibold hover:bg-ogm-green-700 transition-colors" }, "Ara")
@@ -3646,7 +3657,7 @@ const App = () => {
         setApprovalRequests(prev => [...prev, request]);
     };
     
-    const handleBulkUpdate = async (updates) => {
+     const handleBulkUpdate = async (updates) => {
         const denormalizedUpdates = {};
         if (updates.aircraftData) denormalizedUpdates.aircraftData = updates.aircraftData;
         if (updates.tankerData) denormalizedUpdates.tankerData = updates.tankerData;
@@ -3686,7 +3697,6 @@ const App = () => {
         
         showMessage(`Talep ${approved ? 'onaylandı' : 'reddedildi'}.`, 'success');
     };
-
     const handlePersonnelApproval = async (requestId, approved) => {
         const payload = { requestId };
         const action = approved ? 'onApprovePersonnelRequest' : 'onRejectPersonnelRequest';
