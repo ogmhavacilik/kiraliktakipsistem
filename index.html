@@ -3827,6 +3827,9 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
     const [tankerPlateFilter, setTankerPlateFilter] = useState('');
     const [report, setReport] = useState(null);
     const [modalData, setModalData] = useState(null);
+    const [isAllReceiptsModalOpen, setIsAllReceiptsModalOpen] = useState(false);
+    const [allReceiptsFilter, setAllReceiptsFilter] = useState('');
+    const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'used', 'missing', 'unused'
 
     const handleDateChange = (e) => {
         setDateRange(prev => ({...prev, [e.target.name]: e.target.value}));
@@ -4014,7 +4017,7 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                 } else if (missingSerials.includes(i)) {
                     serials.push({
                         serial: i,
-                        status: 'Eksik',
+                        status: 'Koçan yazılmamış (yüklenmemiş)',
                         receiptDate: '-',
                         recordDate: '-',
                         note: "-",
@@ -4023,7 +4026,7 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                 } else {
                      serials.push({
                         serial: i,
-                        status: 'Kullanılmadı',
+                        status: 'Kullanılmamış koçan',
                         receiptDate: '-',
                         recordDate: '-',
                         note: "-",
@@ -4035,19 +4038,203 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
         return serials;
     }, [modalData]);
 
+    const allReceiptsList = useMemo(() => {
+        const allRecords = [...fuelRecords, ...(ogmRecords || [])];
+        const filteredRecords = (dateRange.start && dateRange.end)
+            ? allRecords.filter(r => r.date >= dateRange.start && r.date <= dateRange.end)
+            : allRecords;
+
+        const recordsBySerial = {};
+        const usedSerialsByPlate = {};
+
+        filteredRecords.forEach(record => {
+            const matches = String(record.receiptNumber || '').match(/\d+/g);
+            if (matches) {
+                for (const m of matches) {
+                    const val = parseInt(m, 10);
+                    const actualOwnerBook = receiptBooks.find(b => val >= b.startSerial && val <= b.endSerial);
+                    if (actualOwnerBook) {
+                        const ownerPlate = actualOwnerBook.tankerPlate;
+                        if (!usedSerialsByPlate[ownerPlate]) usedSerialsByPlate[ownerPlate] = new Set();
+                        usedSerialsByPlate[ownerPlate].add(val);
+
+                        let enteredPlate = "";
+                        if (record.recordType === 'personnel' && record.locationType === 'Tanker') {
+                            enteredPlate = record.location;
+                        } else if (record.recordType === 'tankerTransfer') {
+                            enteredPlate = record.fillingTankerPlate;
+                        } else if (record.recordType === 'tankerDolum') {
+                            enteredPlate = record.tankerPlate;
+                        }
+
+                        let crossTankerNote = "";
+                        if (record.isOgmSystemRecord) {
+                            const isWaste = String(record.jobTitle || '').toLowerCase().includes('sofor') || String(record.tailNumber || '').toLowerCase().includes('atik') || String(record.receiptType || '').toLowerCase().includes('atik');
+                            const tailNumStr = (record.tailNumber && record.tailNumber !== '-') ? record.tailNumber : 'OR-xx';
+                            crossTankerNote = `OGM Sistem Kaydı - Hava Aracı: ${isWaste ? 'ATIK / ATIK YAKIT' : tailNumStr}`;
+                            if (record.personnelName && record.personnelName !== '-') {
+                                crossTankerNote += ` (${record.personnelName})`;
+                            }
+                        } else if (enteredPlate && enteredPlate !== ownerPlate) {
+                            crossTankerNote = `Koçan ${ownerPlate} tankerine ait fakat ${enteredPlate} seçilerek girilmiş.`;
+                        } else {
+                            crossTankerNote = "Sistem Kaydı";
+                        }
+
+                        let transactionType = "Hava Aracı İkmal";
+                        if (record.recordType === 'tankerDolum') {
+                            transactionType = "Tanker Dolum";
+                        } else if (record.recordType === 'tankerTransfer') {
+                            transactionType = "Tanker Transfer";
+                        } else if (record.recordType === 'personnel') {
+                            transactionType = "Hava Aracı İkmal";
+                        }
+
+                        recordsBySerial[val] = {
+                            ...record,
+                            matchedSerial: val,
+                            ownerPlate,
+                            transactionType,
+                            crossTankerNote
+                        };
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Teslim edilen tankerlere göre sıralı
+        const tankersToReportOn = tankerPlateFilter 
+            ? tankerData.filter(t => t.plate === tankerPlateFilter)
+            : [...tankerData].sort((a,b) => {
+                const regA = a.region || '';
+                const regB = b.region || '';
+                if (regA !== regB) return regA.localeCompare(regB, 'tr-TR');
+                return a.plate.localeCompare(b.plate, 'tr-TR');
+            });
+
+        const list = [];
+
+        tankersToReportOn.forEach(tanker => {
+            const assignedBooks = receiptBooks.filter(b => b.tankerPlate === tanker.plate);
+            if (assignedBooks.length === 0) return;
+
+            const usedSerials = usedSerialsByPlate[tanker.plate] || new Set();
+            const usedArray = Array.from(usedSerials).sort((a, b) => a - b);
+
+            assignedBooks.sort((a,b) => a.startSerial - b.startSerial).forEach(book => {
+                const bookUsedSerials = usedArray.filter(s => s >= book.startSerial && s <= book.endSerial);
+                const bookMaxUsed = bookUsedSerials.length > 0 ? Math.max(...bookUsedSerials) : 0;
+
+                for (let i = book.startSerial; i <= book.endSerial; i++) {
+                    const record = recordsBySerial[i];
+                    if (record) {
+                        list.push({
+                            serial: i,
+                            plate: tanker.plate,
+                            region: tanker.region || 'Bölge Belirtilmemiş',
+                            bookRange: `${book.startSerial}-${book.endSerial}`,
+                            status: 'Kullanıldı',
+                            statusClass: 'text-green-700 font-bold bg-green-100 px-2 py-0.5 rounded text-xs',
+                            transactionType: record.transactionType,
+                            fuelAmount: Number(record.fuelAmount) || 0,
+                            receiptDate: record.date ? formatDisplayDateOnly(record.date) : '-',
+                            recordDate: record.kayitNumarasi ? formatDisplayDate(record.kayitNumarasi) : '-',
+                            personnel: record.personnelName || '-',
+                            tailNumber: record.tailNumber || '-',
+                            location: record.location || '-',
+                            note: record.crossTankerNote || '-'
+                        });
+                    } else {
+                        const hasUsedBefore = bookUsedSerials.some(s => s < i);
+                        const hasUsedAfter = bookUsedSerials.some(s => s > i);
+
+                        let status = 'Kullanılmamış koçan';
+                        let statusClass = 'text-slate-500 bg-slate-100 px-2 py-0.5 rounded text-xs';
+
+                        if ((hasUsedBefore && hasUsedAfter) || (hasUsedBefore && i <= bookMaxUsed)) {
+                            status = 'Koçan yazılmamış (yüklenmemiş)';
+                            statusClass = 'text-red-700 font-bold bg-red-100 px-2 py-0.5 rounded text-xs';
+                        } else {
+                            status = 'Kullanılmamış koçan';
+                            statusClass = 'text-slate-500 bg-slate-100 px-2 py-0.5 rounded text-xs';
+                        }
+
+                        list.push({
+                            serial: i,
+                            plate: tanker.plate,
+                            region: tanker.region || 'Bölge Belirtilmemiş',
+                            bookRange: `${book.startSerial}-${book.endSerial}`,
+                            status,
+                            statusClass,
+                            transactionType: '-',
+                            fuelAmount: 0,
+                            receiptDate: '-',
+                            recordDate: '-',
+                            personnel: '-',
+                            tailNumber: '-',
+                            location: '-',
+                            note: '-'
+                        });
+                    }
+                }
+            });
+        });
+
+        return list;
+    }, [fuelRecords, ogmRecords, receiptBooks, tankerData, tankerPlateFilter, dateRange]);
+
+    const totalCount = allReceiptsList.length;
+    const usedCount = useMemo(() => allReceiptsList.filter(r => r.status === 'Kullanıldı').length, [allReceiptsList]);
+    const missingCount = useMemo(() => allReceiptsList.filter(r => r.status.includes('yazılmamış')).length, [allReceiptsList]);
+    const unusedCount = useMemo(() => allReceiptsList.filter(r => r.status.includes('Kullanılmamış')).length, [allReceiptsList]);
+
+    const filteredAllReceiptsList = useMemo(() => {
+        let list = allReceiptsList;
+        if (statusFilter === 'used') {
+            list = list.filter(item => item.status === 'Kullanıldı');
+        } else if (statusFilter === 'missing') {
+            list = list.filter(item => item.status.includes('yazılmamış') || item.status.includes('Eksik'));
+        } else if (statusFilter === 'unused') {
+            list = list.filter(item => item.status.includes('Kullanılmamış'));
+        }
+
+        if (!allReceiptsFilter.trim()) return list;
+        const query = allReceiptsFilter.toLocaleLowerCase('tr-TR').trim();
+        return list.filter(item => 
+            String(item.plate).toLocaleLowerCase('tr-TR').includes(query) ||
+            String(item.region).toLocaleLowerCase('tr-TR').includes(query) ||
+            String(item.serial).includes(query) ||
+            String(item.status).toLocaleLowerCase('tr-TR').includes(query) ||
+            String(item.transactionType).toLocaleLowerCase('tr-TR').includes(query) ||
+            String(item.personnel).toLocaleLowerCase('tr-TR').includes(query) ||
+            String(item.tailNumber).toLocaleLowerCase('tr-TR').includes(query)
+        );
+    }, [allReceiptsList, statusFilter, allReceiptsFilter]);
+
+    const exportAllReceiptsToExcel = () => {
+        const table = document.getElementById('tum-makbuzlar-table-export');
+        if (table) {
+            exportTableToExcel('tum-makbuzlar-table-export', 'tum_makbuzlar_ve_kocan_seri_takip_raporu');
+            showMessage("Tüm makbuzlar Excel dosyası olarak indirildi.", 'success');
+        } else {
+            showMessage("Tablo bulunamadı.", 'error');
+        }
+    };
+
 
     return (
         React.createElement("div", { className: "space-y-6" },
             React.createElement("h2", { className: "text-xl font-semibold text-slate-700" }, "Bölge Tankeri Makbuz Takibi"),
             React.createElement("div", { className: "p-4 bg-black/5 rounded-lg border border-slate-200" },
-                 React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end" },
+                 React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 items-end" },
                      React.createElement("div", null,
                         React.createElement("label", {className: "font-semibold text-slate-600 mb-2 block text-sm"}, "Başlangıç Tarihi:"),
-                        React.createElement("input", { type: "date", name: "start", value: dateRange.start, onChange: handleDateChange, className: "w-full p-2 border rounded" })
+                        React.createElement("input", { type: "date", name: "start", value: dateRange.start, onChange: handleDateChange, className: "w-full p-2 border rounded text-sm bg-white" })
                      ),
                      React.createElement("div", null,
                         React.createElement("label", {className: "font-semibold text-slate-600 mb-2 block text-sm"}, "Bitiş Tarihi:"),
-                        React.createElement("input", { type: "date", name: "end", value: dateRange.end, onChange: handleDateChange, className: "w-full p-2 border rounded" })
+                        React.createElement("input", { type: "date", name: "end", value: dateRange.end, onChange: handleDateChange, className: "w-full p-2 border rounded text-sm bg-white" })
                      ),
                      React.createElement("div", null,
                         React.createElement("label", {className: "font-semibold text-slate-600 mb-2 block text-sm"}, "Tanker Plakası (Opsiyonel):"),
@@ -4056,10 +4243,19 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                             value: tankerPlateFilter,
                             onChange: (value) => setTankerPlateFilter(value),
                             placeholder: "Tüm Tankerler",
-                            className: "w-full p-2 border border-slate-300 rounded-md text-base"
+                            className: "w-full p-2 border border-slate-300 rounded-md text-sm bg-white"
                         })
                      ),
-                     React.createElement("button", { onClick: handleGenerateReport, className: "w-full py-2 px-4 bg-ogm-green-600 text-white rounded-lg font-semibold hover:bg-ogm-green-700" }, "Ara")
+                     React.createElement("button", { 
+                         onClick: () => setIsAllReceiptsModalOpen(true), 
+                         className: "w-full py-2 px-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-1.5 shadow-md text-sm" 
+                     }, 
+                        React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
+                            React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" })
+                        ),
+                        "Tüm Makbuzları Görüntüle"
+                     ),
+                     React.createElement("button", { onClick: handleGenerateReport, className: "w-full py-2 px-4 bg-ogm-green-600 text-white rounded-lg font-semibold hover:bg-ogm-green-700 text-sm shadow-md" }, "Ara")
                  )
             ),
             report ? (
@@ -4133,6 +4329,123 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                         )
                     ) : (
                          React.createElement("p", {className: "text-green-600 font-semibold"}, "Bu tanker için atanmış koçan bulunamadı veya kullanılmadı.")
+                    )
+                )
+            ),
+            React.createElement(Modal, { 
+                isOpen: isAllReceiptsModalOpen, 
+                onClose: () => setIsAllReceiptsModalOpen(false), 
+                title: "Tüm Makbuzlar ve Koçan Seri Takibi" 
+            },
+                React.createElement("div", { className: "w-full space-y-4 py-2" },
+                    React.createElement("div", { className: "flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-slate-50 p-3 rounded-lg border border-slate-200" },
+                        React.createElement("div", { className: "flex flex-wrap items-center gap-2 text-xs" },
+                            React.createElement("button", {
+                                type: "button",
+                                onClick: () => setStatusFilter('all'),
+                                title: "Tüm makbuz ve koçanları göster",
+                                className: `px-3 py-1.5 rounded-full font-extrabold transition-all duration-200 cursor-pointer flex items-center gap-1.5 shadow-sm text-xs ${
+                                    statusFilter === 'all'
+                                        ? 'bg-blue-600 text-white ring-2 ring-blue-600 ring-offset-1 scale-105 shadow-md'
+                                        : 'bg-blue-100 text-blue-900 hover:bg-blue-200 hover:scale-102'
+                                }`
+                            }, `Toplam Makbuz: ${totalCount}`),
+                            React.createElement("button", {
+                                type: "button",
+                                onClick: () => setStatusFilter('used'),
+                                title: "Sadece kullanılan makbuzları filtrele",
+                                className: `px-3 py-1.5 rounded-full font-extrabold transition-all duration-200 cursor-pointer flex items-center gap-1.5 shadow-sm text-xs ${
+                                    statusFilter === 'used'
+                                        ? 'bg-green-600 text-white ring-2 ring-green-600 ring-offset-1 scale-105 shadow-md'
+                                        : 'bg-green-100 text-green-900 hover:bg-green-200 hover:scale-102'
+                                }`
+                            }, `Kullanılan: ${usedCount}`),
+                            React.createElement("button", {
+                                type: "button",
+                                onClick: () => setStatusFilter('missing'),
+                                title: "Sadece yazılmamış (yüklenmemiş) koçanları filtrele",
+                                className: `px-3 py-1.5 rounded-full font-extrabold transition-all duration-200 cursor-pointer flex items-center gap-1.5 shadow-sm text-xs ${
+                                    statusFilter === 'missing'
+                                        ? 'bg-red-600 text-white ring-2 ring-red-600 ring-offset-1 scale-105 shadow-md'
+                                        : 'bg-red-100 text-red-900 hover:bg-red-200 hover:scale-102'
+                                }`
+                            }, `Yüklenmemiş: ${missingCount}`),
+                            React.createElement("button", {
+                                type: "button",
+                                onClick: () => setStatusFilter('unused'),
+                                title: "Sadece henüz kullanılmamış koçanları filtrele",
+                                className: `px-3 py-1.5 rounded-full font-extrabold transition-all duration-200 cursor-pointer flex items-center gap-1.5 shadow-sm text-xs ${
+                                    statusFilter === 'unused'
+                                        ? 'bg-slate-700 text-white ring-2 ring-slate-700 ring-offset-1 scale-105 shadow-md'
+                                        : 'bg-slate-200 text-slate-900 hover:bg-slate-300 hover:scale-102'
+                                }`
+                            }, `Kullanılmamış: ${unusedCount}`)
+                        ),
+                        React.createElement("div", { className: "flex items-center gap-2 w-full lg:w-auto" },
+                            React.createElement("input", { 
+                                type: "text", 
+                                value: allReceiptsFilter, 
+                                onChange: (e) => setAllReceiptsFilter(e.target.value), 
+                                placeholder: "Hızlı Ara (Plaka, Seri No, Personel)...", 
+                                className: "p-2 border border-slate-300 rounded text-xs w-full lg:w-64 bg-white shadow-sm focus:ring-2 focus:ring-ogm-green-500 outline-none" 
+                            }),
+                            React.createElement("button", { 
+                                onClick: exportAllReceiptsToExcel, 
+                                className: "py-2 px-3.5 bg-ogm-green-600 text-white rounded text-xs font-bold hover:bg-ogm-green-700 transition-colors flex items-center gap-1.5 shrink-0 shadow-md" 
+                            }, 
+                                React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 }, React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" })),
+                                "Excel İndir"
+                            )
+                        )
+                    ),
+                    React.createElement("div", { className: "max-h-[65vh] overflow-y-auto border border-slate-300 rounded-lg shadow-inner bg-white" },
+                        React.createElement("table", { id: "tum-makbuzlar-table-export", className: "excel-table w-full text-xs" },
+                            React.createElement("thead", { className: "sticky top-0 z-10 shadow-md" },
+                                React.createElement("tr", { className: "bg-[#14532d] text-white" },
+                                    [
+                                        'Teslim Edilen Tanker', 
+                                        'Bölge', 
+                                        'Koçan Aralığı', 
+                                        'Koçan Seri No', 
+                                        'Seri Durumu', 
+                                        'İşlem Türü (İkmal / Dolum / Transfer)', 
+                                        'Yakıt Girişi (lt)', 
+                                        'Makbuz Tarihi', 
+                                        'Kayıt Tarihi', 
+                                        'Personel / Detay', 
+                                        'Not'
+                                    ].map(h => (
+                                        React.createElement("th", { 
+                                            key: h, 
+                                            className: "p-2.5 text-left font-bold border border-emerald-900 bg-[#14532d] text-white text-[11px] uppercase tracking-wider whitespace-nowrap" 
+                                        }, h)
+                                    ))
+                                )
+                            ),
+                            React.createElement("tbody", { className: "divide-y divide-slate-200" },
+                                filteredAllReceiptsList.length > 0 ? (
+                                    filteredAllReceiptsList.map((item, index) => (
+                                        React.createElement("tr", { key: `${item.plate}-${item.serial}-${index}`, className: "hover:bg-slate-50 transition-colors" },
+                                            React.createElement("td", { className: "font-bold text-slate-800" }, item.plate),
+                                            React.createElement("td", { className: "text-slate-600" }, item.region),
+                                            React.createElement("td", { className: "text-slate-500 font-mono text-[11px]" }, item.bookRange),
+                                            React.createElement("td", { className: "font-extrabold text-blue-900 text-sm" }, item.serial),
+                                            React.createElement("td", null, React.createElement("span", { className: item.statusClass }, item.status)),
+                                            React.createElement("td", { className: "font-semibold text-slate-700" }, item.transactionType),
+                                            React.createElement("td", { className: "text-right font-bold text-slate-900" }, item.fuelAmount > 0 ? `${item.fuelAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} lt` : '-'),
+                                            React.createElement("td", null, item.receiptDate),
+                                            React.createElement("td", null, item.recordDate),
+                                            React.createElement("td", null, item.personnel !== '-' ? `${item.personnel} (${item.tailNumber})` : item.location),
+                                            React.createElement("td", { className: "italic text-slate-500 text-[11px]" }, item.note)
+                                        )
+                                    ))
+                                ) : (
+                                    React.createElement("tr", null,
+                                        React.createElement("td", { colSpan: 11, className: "p-6 text-center text-slate-500 italic" }, "Aramanızla veya seçtiğiniz durum filtresiyle eşleşen koçan veya makbuz kaydı bulunamadı.")
+                                    )
+                                )
+                            )
+                        )
                     )
                 )
             )
