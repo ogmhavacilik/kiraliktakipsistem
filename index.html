@@ -537,7 +537,7 @@ const MessageBox = ({ text, type }) => {
     );
 };
 
-const RedirectingOverlay = ({ isVisible, isFadingOut }) => {
+const RedirectingOverlay = ({ isVisible, isFadingOut, message }) => {
     if (!isVisible) return null;
     const animationClass = isFadingOut ? 'animate-fadeOut' : 'animate-fadeIn';
     return (
@@ -547,7 +547,7 @@ const RedirectingOverlay = ({ isVisible, isFadingOut }) => {
                 alt: "Helikopter Logo",
                 className: "h-48 w-48 rounded-full object-cover mb-8"
             }),
-            React.createElement("p", { className: "text-2xl text-ogm-green-800 font-bold" }, "Makbuz yükleme adımına yönlendiriliyorsunuz...")
+            React.createElement("p", { className: "text-2xl text-ogm-green-800 font-bold px-4 max-w-3xl" }, message || "Makbuz yükleme adımına yönlendiriliyorsunuz...")
         )
     );
 };
@@ -3817,7 +3817,7 @@ const ReceiptBookManagement = ({ receiptBooks, tankerData, onUpdate, showMessage
     );
 };
 
-const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], receiptBooks, showMessage }) => {
+const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], receiptBooks, showMessage, handleAddRecord, updateFuelRecords, onStartRedirection }) => {
     const today = new Date();
     const currentYear = today.getFullYear();
     const firstDay = new Date(currentYear, 0, 1).toISOString().split('T')[0]; 
@@ -3830,6 +3830,11 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
     const [isAllReceiptsModalOpen, setIsAllReceiptsModalOpen] = useState(false);
     const [allReceiptsFilter, setAllReceiptsFilter] = useState('');
     const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'used', 'missing', 'unused'
+
+    // Missing receipt double click state
+    const [selectedMissingReceipt, setSelectedMissingReceipt] = useState(null);
+    const [missingReason, setMissingReason] = useState('Makbuz Hasarlandı');
+    const [missingDescription, setMissingDescription] = useState('');
 
     const handleDateChange = (e) => {
         setDateRange(prev => ({...prev, [e.target.name]: e.target.value}));
@@ -4222,6 +4227,69 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
         }
     };
 
+    const handleRowDoubleClick = (item) => {
+        setSelectedMissingReceipt(item);
+        setMissingReason('Makbuz Hasarlandı');
+        setMissingDescription('');
+    };
+
+    const handleSaveMissingReason = async () => {
+        if (!selectedMissingReceipt) return;
+
+        let finalReason = missingReason;
+        if (missingReason === 'Diğer') {
+            if (!missingDescription.trim()) {
+                showMessage("Lütfen 'Diğer' seçeneği için bir açıklama giriniz.", 'error');
+                return;
+            }
+            finalReason = missingDescription.trim();
+        } else if (missingDescription.trim()) {
+            finalReason = `${missingReason} - ${missingDescription.trim()}`;
+        }
+
+        const recNo = generateRecordNumber();
+        const newRecord = {
+            id: recNo,
+            kayitNumarasi: recNo,
+            date: new Date().toISOString().split('T')[0],
+            receiptNumber: String(selectedMissingReceipt.serial),
+            receiptType: finalReason,
+            fuelAmount: 0,
+            recordType: 'personnel',
+            tailNumber: '-',
+            personnelName: '-',
+            jobTitle: '-',
+            cardNumber: '-',
+            locationType: '-',
+            location: selectedMissingReceipt.plate || '-',
+            note: finalReason
+        };
+
+        try {
+            if (typeof handleAddRecord === 'function') {
+                await handleAddRecord(newRecord);
+            } else if (typeof updateFuelRecords === 'function') {
+                await updateFuelRecords([...fuelRecords, newRecord]);
+            }
+            setSelectedMissingReceipt(null);
+
+            const redirectUrl = "https://bulut.ogm.gov.tr/HASARLI";
+            const redirectMsg = "KAYDEDİLDİ. HASARLI / İPTAL MAKBUZUN GÖRSELİNİ YÜKLEME ADIMINA YÖNLENDİRİLİYORSUNUZ...";
+
+            if (typeof onStartRedirection === 'function') {
+                onStartRedirection(redirectUrl, redirectMsg);
+            } else {
+                showMessage("KAYDEDİLDİ. HASARLI / İPTAL MAKBUZUN GÖRSELİNİ YÜKLEME ADIMINA YÖNLENDİRİLİYORSUNUZ...", "success");
+                setTimeout(() => {
+                    window.location.href = redirectUrl;
+                }, 2000);
+            }
+        } catch (err) {
+            console.error("Makbuz kaydı hatası:", err);
+            showMessage("Makbuz kaydı eklenirken hata oluştu.", 'error');
+        }
+    };
+
 
     return (
         React.createElement("div", { className: "space-y-6" },
@@ -4425,11 +4493,19 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                             React.createElement("tbody", { className: "divide-y divide-slate-200" },
                                 filteredAllReceiptsList.length > 0 ? (
                                     filteredAllReceiptsList.map((item, index) => (
-                                        React.createElement("tr", { key: `${item.plate}-${item.serial}-${index}`, className: "hover:bg-slate-50 transition-colors" },
+                                        React.createElement("tr", { 
+                                            key: `${item.plate}-${item.serial}-${index}`, 
+                                            onDoubleClick: () => handleRowDoubleClick(item),
+                                            title: "Eksik / hasar veya işlem gerekçesi kaydetmek için çift tıklayın",
+                                            className: "hover:bg-amber-50/80 cursor-pointer transition-colors" 
+                                        },
                                             React.createElement("td", { className: "font-bold text-slate-800" }, item.plate),
                                             React.createElement("td", { className: "text-slate-600" }, item.region),
                                             React.createElement("td", { className: "text-slate-500 font-mono text-[11px]" }, item.bookRange),
-                                            React.createElement("td", { className: "font-extrabold text-blue-900 text-sm" }, item.serial),
+                                            React.createElement("td", { className: "font-extrabold text-blue-900 text-sm flex items-center justify-between gap-1" }, 
+                                                item.serial,
+                                                (item.status.includes('yazılmamış') || item.status.includes('Eksik')) && React.createElement("span", { className: "text-[9px] text-amber-800 bg-amber-100 border border-amber-300 px-1 rounded font-medium shrink-0 shadow-2xs" }, "Çift Tıkla")
+                                            ),
                                             React.createElement("td", null, React.createElement("span", { className: item.statusClass }, item.status)),
                                             React.createElement("td", { className: "font-semibold text-slate-700" }, item.transactionType),
                                             React.createElement("td", { className: "text-right font-bold text-slate-900" }, item.fuelAmount > 0 ? `${item.fuelAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} lt` : '-'),
@@ -4444,6 +4520,88 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                                         React.createElement("td", { colSpan: 11, className: "p-6 text-center text-slate-500 italic" }, "Aramanızla veya seçtiğiniz durum filtresiyle eşleşen koçan veya makbuz kaydı bulunamadı.")
                                     )
                                 )
+                            )
+                        )
+                    )
+                ),
+                React.createElement(Modal, {
+                    isOpen: !!selectedMissingReceipt,
+                    onClose: () => setSelectedMissingReceipt(null),
+                    title: "Eksik / İşlenmemiş Makbuz Takip Kaydı"
+                },
+                    selectedMissingReceipt && React.createElement("div", { className: "space-y-4 py-2 text-xs sm:text-sm" },
+                        React.createElement("div", { className: "bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-1.5" },
+                            React.createElement("div", { className: "flex justify-between items-center" },
+                                React.createElement("span", { className: "text-slate-500 font-semibold" }, "Makbuz Seri No:"),
+                                React.createElement("span", { className: "font-extrabold text-blue-900 text-base" }, selectedMissingReceipt.serial)
+                            ),
+                            React.createElement("div", { className: "flex justify-between items-center" },
+                                React.createElement("span", { className: "text-slate-500 font-semibold" }, "Atanan Tanker Plakası:"),
+                                React.createElement("span", { className: "font-bold text-slate-800" }, selectedMissingReceipt.plate)
+                            ),
+                            React.createElement("div", { className: "flex justify-between items-center" },
+                                React.createElement("span", { className: "text-slate-500 font-semibold" }, "Konuşlu Bölge:"),
+                                React.createElement("span", { className: "font-semibold text-slate-700" }, selectedMissingReceipt.region)
+                            ),
+                            React.createElement("div", { className: "flex justify-between items-center" },
+                                React.createElement("span", { className: "text-slate-500 font-semibold" }, "Koçan Aralığı:"),
+                                React.createElement("span", { className: "font-mono text-slate-600" }, selectedMissingReceipt.bookRange)
+                            )
+                        ),
+                        React.createElement("div", { className: "space-y-2" },
+                            React.createElement("label", { className: "block font-bold text-slate-700" }, "Makbuz Durum / Eksik Nedeni:"),
+                            React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-3 gap-2" },
+                                [
+                                    { id: 'Makbuz Hasarlandı', label: 'Makbuz Hasarlandı' },
+                                    { id: 'Makbuz Atlanmış', label: 'Makbuz Atlanmış' },
+                                    { id: 'Diğer', label: 'Diğer' }
+                                ].map(opt => (
+                                    React.createElement("button", {
+                                        key: opt.id,
+                                        type: "button",
+                                        onClick: () => setMissingReason(opt.id),
+                                        className: `p-2.5 rounded-lg border text-xs font-bold transition-all text-center cursor-pointer ${
+                                            missingReason === opt.id
+                                                ? 'bg-ogm-green-600 text-white border-ogm-green-700 ring-2 ring-ogm-green-500 shadow-sm'
+                                                : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                                        }`
+                                    }, opt.label)
+                                ))
+                            )
+                        ),
+                        React.createElement("div", { className: "space-y-1.5" },
+                            React.createElement("label", { className: "block font-bold text-slate-700" },
+                                missingReason === 'Diğer' ? "Açıklama / Nedeni (Zorunlu):" : "Açıklama / Not (Opsiyonel):"
+                            ),
+                            React.createElement("textarea", {
+                                rows: 3,
+                                value: missingDescription,
+                                onChange: (e) => setMissingDescription(e.target.value),
+                                placeholder: missingReason === 'Diğer' ? "Lütfen eksik veya iptal nedenini detaylıca yazınız..." : "Ek not veya açıklama ekleyebilirsiniz...",
+                                className: "w-full p-2.5 border border-slate-300 rounded-lg text-xs bg-white focus:ring-2 focus:ring-ogm-green-500 outline-none"
+                            })
+                        ),
+                        React.createElement("div", { className: "p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs flex items-start gap-2" },
+                            React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-5 w-5 text-amber-600 shrink-0 mt-0.5", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor" },
+                                React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: 2, d: "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" })
+                            ),
+                            React.createElement("p", null, "Bu işlem herhangi bir yakıt ikmali yaratmaz. Makbuz 0 (sıfır) lt olarak Makbuz Yönetimi'ne kaydedilecek ve koçan takip listesindeki eksik durumundan çıkarılacaktır.")
+                        ),
+                        React.createElement("div", { className: "flex justify-end gap-2 pt-2 border-t border-slate-200" },
+                            React.createElement("button", {
+                                type: "button",
+                                onClick: () => setSelectedMissingReceipt(null),
+                                className: "py-2 px-4 bg-slate-200 text-slate-700 rounded-lg font-bold text-xs hover:bg-slate-300 transition-colors cursor-pointer"
+                            }, "İptal"),
+                            React.createElement("button", {
+                                type: "button",
+                                onClick: handleSaveMissingReason,
+                                className: "py-2 px-5 bg-ogm-green-600 text-white rounded-lg font-bold text-xs hover:bg-ogm-green-700 shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
+                            },
+                                React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
+                                    React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M5 13l4 4L19 7" })
+                                ),
+                                "Makbuz Yönetimine Kaydet"
                             )
                         )
                     )
@@ -4697,7 +4855,7 @@ const AdminPanel = (props) => {
                 activeModule === 'dataEntry' && React.createElement(DataEntryModule, null),
                 activeModule === 'receipts' && React.createElement(RecordManagement, { fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, onUpdateFuelRecords: props.updateFuelRecords, aircraftData: props.aircraftData, tankerData: props.tankerData, airportList: props.airportList, showMessage: props.showMessage, onDeleteRecord: props.onDeleteRecord, undoBuffer: props.undoBuffer, setUndoBuffer: props.setUndoBuffer, conflictData: props.conflictData, setConflictData: props.setConflictData, personnelList: props.personnelList, currentUser: props.currentUser }),
                 activeModule === 'tankerTracking' && React.createElement(TankerTakip, { tankerData: props.tankerData, fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, showMessage: props.showMessage }),
-                activeModule === 'regionReceiptTracking' && React.createElement(RegionReceiptTracking, { tankerData: props.tankerData, fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, receiptBooks: props.receiptBooks, showMessage: props.showMessage }),
+                activeModule === 'regionReceiptTracking' && React.createElement(RegionReceiptTracking, { tankerData: props.tankerData, fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, receiptBooks: props.receiptBooks, showMessage: props.showMessage, handleAddRecord: props.handleAddRecord, updateFuelRecords: props.updateFuelRecords, onStartRedirection: props.onStartRedirection }),
                 activeModule === 'approval' && React.createElement(ApprovalRequestsComponent, { approvalRequests: props.approvalRequests, personnelApprovalRequests: props.personnelApprovalRequests, onHandleEditApproval: props.handleEditApproval, onHandlePersonnelApproval: props.handlePersonnelApproval, showMessage: props.showMessage, fuelRecords: props.fuelRecords }),
                 activeModule === 'settings' && React.createElement(UserManagement, { adminCredentials: props.adminCredentials, onAddUser: props.addAdminUser, onDeleteUser: props.deleteAdminUser, showMessage: props.showMessage })
             )
@@ -4786,7 +4944,7 @@ const App = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [isProcessing, setIsProcessing] = useState(false);
     const [criticalError, setCriticalError] = useState(null);
-    const [redirectInfo, setRedirectInfo] = useState({ isRedirecting: false, isFadingOut: false });
+    const [redirectInfo, setRedirectInfo] = useState({ isRedirecting: false, isFadingOut: false, message: '' });
 
     const [fuelRecords, setFuelRecords] = useState([]);
     const [aircraftData, setAircraftData] = useState([]);
@@ -4808,8 +4966,8 @@ const App = () => {
         setTimeout(() => setMessage(null), 5000);
     };
 
-    const handleStartRedirection = (url) => {
-        setRedirectInfo({ isRedirecting: true, isFadingOut: false });
+    const handleStartRedirection = (url, customMessage) => {
+        setRedirectInfo({ isRedirecting: true, isFadingOut: false, message: customMessage || '' });
         setTimeout(() => {
             setRedirectInfo(prev => ({ ...prev, isFadingOut: true }));
             setTimeout(() => {
@@ -5274,7 +5432,7 @@ const App = () => {
 
     return (
         React.createElement(React.Fragment, null,
-            React.createElement(RedirectingOverlay, { isVisible: redirectInfo.isRedirecting, isFadingOut: redirectInfo.isFadingOut }),
+            React.createElement(RedirectingOverlay, { isVisible: redirectInfo.isRedirecting, isFadingOut: redirectInfo.isFadingOut, message: redirectInfo.message }),
             React.createElement("div", { className: "container mx-auto p-2 sm:p-6 md:p-8 lg:p-12" },
                 React.createElement("div", { className: "bg-white/70 backdrop-blur-md rounded-2xl shadow-xl p-6 sm:p-8 md:p-10" },
                     React.createElement(Header, null),
@@ -5341,7 +5499,9 @@ const App = () => {
                                 setUndoBuffer: setUndoBuffer,
                                 conflictData: conflictData,
                                 setConflictData: setConflictData,
-                                onDeleteRecord: onDeleteRecord
+                                onDeleteRecord: onDeleteRecord,
+                                handleAddRecord: handleAddRecord,
+                                onStartRedirection: handleStartRedirection
                             })
                     )
                 )
