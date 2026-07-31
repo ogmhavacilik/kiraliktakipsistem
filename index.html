@@ -69,6 +69,14 @@
       .blink-conflict {
         animation: fuelBlink 1s infinite !important;
       }
+      /* Patch: Blinking Yellow Row for Missing Explanation */
+      @keyframes yellowBlink {
+        0%, 100% { background-color: #fef08a !important; color: #713f12; }
+        50% { background-color: #fde047 !important; color: #713f12; }
+      }
+      .blink-yellow-row td {
+        animation: yellowBlink 1.5s infinite ease-in-out !important;
+      }
       /* Excel style table fixes */
       .excel-table {
         border-collapse: collapse;
@@ -152,7 +160,7 @@ import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 
 // From constants.ts
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxPF3hJzd4G27oaRjHHQY8X72gALxAzxbfDFo1RJJAfJbwuyfbZt1FL68rP7IdeghJdAA/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxGOrppHEe0ZJqqmF-Tz7CSJpyp5f2BaabrvtyVPYGuLBV0YtJVvfDhBwWbgoLvnw5rGA/exec";
 // ogm hava araçları verisi scripti
 const OGM_AIRCRAFT_DATA_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwJVvXLX84N_79x_Yik_flkQ1jjr70Krwqnj6vJ77gUnCSlUcs9oq2MkKpTy2ZIwtU/exec";
 
@@ -765,11 +773,15 @@ const FuelEntryForm = ({ personnelList, aircraftData, tankerData, airportList, f
     const handlePersonnelChange = (selectedValue) => {
         const selectedPersonnel = personnelList.find(p => p.id === selectedValue);
         if (selectedPersonnel) {
+            let jobTitleVal = selectedPersonnel.job || '';
+            if (jobTitleVal.trim().toUpperCase() === 'ŞOFÖR' || jobTitleVal.trim().toUpperCase() === 'SOFOR') {
+                jobTitleVal = 'Şoför';
+            }
             setFormData(prev => ({
                 ...prev,
                 personnelId: selectedPersonnel.id,
                 personnelName: selectedPersonnel.name,
-                jobTitle: selectedPersonnel.job
+                jobTitle: jobTitleVal
             }));
         } else {
             setFormData(prev => ({ ...prev, personnelId: '', personnelName: '', jobTitle: '' }));
@@ -894,7 +906,7 @@ const FuelEntryForm = ({ personnelList, aircraftData, tankerData, airportList, f
             if (!isMilitaryLocation) delete recordToSave.cardNumber;
 
             if (isMilitaryLocation) {
-                finalRedirectUrl = "https://bulut.ogm.gov.tr/kiralikaskeri";
+                finalRedirectUrl = "https://bulut.ogm.gov.tr/askeri01";
             } else if (isPersonnelOGM) {
                 finalRedirectUrl = "https://bulut.ogm.gov.tr/OGMKURUMMAKBUZ"; 
             } else {
@@ -932,7 +944,7 @@ const FuelEntryForm = ({ personnelList, aircraftData, tankerData, airportList, f
              }
              
              if (isMilitaryLocation) {
-                 finalRedirectUrl = "https://bulut.ogm.gov.tr/kiralikaskeri";
+                 finalRedirectUrl = "https://bulut.ogm.gov.tr/askeri01";
              } else {
                  finalRedirectUrl = "https://bulut.ogm.gov.tr/KIRALIKTANKER";
              }
@@ -1030,7 +1042,13 @@ const FuelEntryForm = ({ personnelList, aircraftData, tankerData, airportList, f
                     ),
                     formData.jobTitle && !isManualPersonnelEntry && React.createElement("div", { className: "form-group" },
                         React.createElement("label", { className: "font-semibold text-slate-600 mb-2 block" }, "Mesleği:"),
-                        React.createElement(InputField, { type: "text", name: "jobTitle", value: formData.jobTitle, readOnly: true, className: "w-full p-3 border border-slate-300 rounded-lg text-slate-700 bg-slate-100" })
+                        React.createElement(InputField, { 
+                            type: "text", 
+                            name: "jobTitle", 
+                            value: (formData.jobTitle && (formData.jobTitle.trim().toUpperCase() === 'ŞOFÖR' || formData.jobTitle.trim().toUpperCase() === 'SOFOR')) ? 'Şoför' : formData.jobTitle, 
+                            readOnly: true, 
+                            className: "w-full p-3 border border-slate-300 rounded-lg text-slate-700 bg-slate-100" 
+                        })
                     ));
             case 2:
                 return React.createElement("div", { className: "space-y-4" },
@@ -2030,7 +2048,7 @@ const TankerDataManagement = ({ tankerData, onUpdate, showMessage, isReadOnly })
     );
 };
 
-const ApprovalRequestsComponent = ({ approvalRequests, personnelApprovalRequests, onHandleEditApproval, onHandlePersonnelApproval, fuelRecords }) => {
+const ApprovalRequestsComponent = ({ approvalRequests, personnelApprovalRequests, receiptBookApprovalRequests = [], receiptBooks = [], onHandleEditApproval, onHandlePersonnelApproval, onHandleReceiptBookApproval, fuelRecords }) => {
     const [selectedRequest, setSelectedRequest] = useState(null);
     const [selectedPersonnelRequest, setSelectedPersonnelRequest] = useState(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -2057,6 +2075,25 @@ const ApprovalRequestsComponent = ({ approvalRequests, personnelApprovalRequests
         }
         return Array.from(map.values());
     }, [personnelApprovalRequests]);
+
+    // Combine explicit receiptBookApprovalRequests state AND any receiptBooks with pendingDeletion: true
+    const pendingReceiptBookDeletions = useMemo(() => {
+        const list = [...(receiptBookApprovalRequests || [])];
+        (receiptBooks || []).forEach(b => {
+            if (b.pendingDeletion && !list.some(req => req.bookId === b.id || req.id === b.id || req.id === `rb-del-${b.id}`)) {
+                list.push({
+                    id: `rb-del-${b.id}`,
+                    bookId: b.id,
+                    tankerPlate: b.tankerPlate,
+                    startSerial: b.startSerial,
+                    endSerial: b.endSerial,
+                    requestedBy: b.pendingDeleteRequestedBy || 'Kiralık Tanker Sorumlusu Oturumu',
+                    timestamp: new Date().toISOString()
+                });
+            }
+        });
+        return list;
+    }, [receiptBookApprovalRequests, receiptBooks]);
 
     // Find fuel entries logged by the personnel currently selected
     const matchedFuelRecords = useMemo(() => {
@@ -2226,9 +2263,9 @@ const ApprovalRequestsComponent = ({ approvalRequests, personnelApprovalRequests
                     )
                 )
             ),
-             React.createElement("div", null,
+            React.createElement("div", null,
                 React.createElement("h2", { className: "text-xl font-semibold text-slate-700 mb-4" }, "Yeni Personel Kayıt Talepleri"),
-                 React.createElement("div", { className: "overflow-x-auto border border-slate-200 rounded-lg shadow-md" },
+                React.createElement("div", { className: "overflow-x-auto border border-slate-200 rounded-lg shadow-md" },
                     React.createElement("table", { className: "excel-table" },
                         React.createElement("thead", null,
                             React.createElement("tr", null,
@@ -2252,6 +2289,70 @@ const ApprovalRequestsComponent = ({ approvalRequests, personnelApprovalRequests
                             ) : (
                                 React.createElement("tr", null,
                                     React.createElement("td", { colSpan: 4, className: "text-center p-6 text-slate-500" }, "Bekleyen personel kayıt talebi bulunmamaktadır.")
+                                )
+                            )
+                        )
+                    )
+                )
+            ),
+            React.createElement("div", null,
+                React.createElement("h2", { className: "text-xl font-semibold text-slate-700 mb-4 flex items-center justify-between" },
+                    React.createElement("span", null, "Koçan Seri No Silme Talepleri (Kiralık Tanker Sorumlusu Oturumu)"),
+                    pendingReceiptBookDeletions.length > 0 && React.createElement("span", { className: "px-3 py-1 text-xs font-extrabold bg-red-100 text-red-800 rounded-full border border-red-200" }, `${pendingReceiptBookDeletions.length} Bekleyen Talep`)
+                ),
+                React.createElement("div", { className: "overflow-x-auto border border-slate-200 rounded-lg shadow-md" },
+                    React.createElement("table", { className: "excel-table" },
+                        React.createElement("thead", null,
+                            React.createElement("tr", null,
+                                ['Talep Tipi', 'Tanker Plakası', 'Başlangıç Seri No', 'Bitiş Seri No', 'Talep Eden', 'İşlemler'].map(header => (
+                                    React.createElement("th", { key: header }, header)
+                                ))
+                            )
+                        ),
+                        React.createElement("tbody", { className: "divide-y divide-slate-200" },
+                            pendingReceiptBookDeletions.length > 0 ? (
+                                pendingReceiptBookDeletions.map(req => (
+                                    React.createElement("tr", { key: req.id, className: "hover:bg-amber-50/50" },
+                                        React.createElement("td", { className: "p-3 font-bold text-amber-900" }, "Kiralık Tanker Sorumlusu Seri No Silme Talebi"),
+                                        React.createElement("td", { className: "p-3 font-semibold text-slate-800" }, req.tankerPlate),
+                                        React.createElement("td", { className: "p-3 text-right font-mono" }, req.startSerial),
+                                        React.createElement("td", { className: "p-3 text-right font-mono" }, req.endSerial),
+                                        React.createElement("td", { className: "p-3 font-semibold text-blue-700" }, req.requestedBy || 'Kiralık Tanker Sorumlusu Oturumu'),
+                                        React.createElement("td", { className: "p-3 flex items-center gap-2" },
+                                            React.createElement("button", {
+                                                type: "button",
+                                                onClick: async () => {
+                                                    if (isSubmitting) return;
+                                                    setIsSubmitting(true);
+                                                    try {
+                                                        await onHandleReceiptBookApproval(req, true);
+                                                    } finally {
+                                                        setIsSubmitting(false);
+                                                    }
+                                                },
+                                                disabled: isSubmitting,
+                                                className: "py-1.5 px-3 bg-emerald-600 text-white text-xs font-bold rounded-md hover:bg-emerald-700 shadow-sm transition-colors cursor-pointer disabled:bg-slate-400"
+                                            }, "Onayla"),
+                                            React.createElement("button", {
+                                                type: "button",
+                                                onClick: async () => {
+                                                    if (isSubmitting) return;
+                                                    setIsSubmitting(true);
+                                                    try {
+                                                        await onHandleReceiptBookApproval(req, false);
+                                                    } finally {
+                                                        setIsSubmitting(false);
+                                                    }
+                                                },
+                                                disabled: isSubmitting,
+                                                className: "py-1.5 px-3 bg-red-600 text-white text-xs font-bold rounded-md hover:bg-red-700 shadow-sm transition-colors cursor-pointer disabled:bg-slate-400"
+                                            }, "Reddet")
+                                        )
+                                    )
+                                ))
+                            ) : (
+                                React.createElement("tr", null,
+                                    React.createElement("td", { colSpan: 6, className: "text-center p-6 text-slate-500" }, "Bekleyen koçan seri no silme talebi bulunmamaktadır.")
                                 )
                             )
                         )
@@ -2905,6 +3006,33 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
     };
 
     const getReceiptLink = (record) => {
+        if (!record) return "https://bulut.ogm.gov.tr/hasarmakbuz01";
+
+        const locStr = String(record.location || '').toLowerCase('tr-TR');
+        const locTypeStr = String(record.locationType || '').toLowerCase('tr-TR');
+        
+        const matchedAirport = (airportList && Array.isArray(airportList))
+            ? airportList.find(a => 
+                (a.name && (a.name === record.location || locStr.includes(a.name.toLowerCase('tr-TR')))) ||
+                (a.id && (a.id === record.location || locStr.includes(a.id.toLowerCase('tr-TR'))))
+              )
+            : null;
+
+        const isMilitaryLocation = locTypeStr.includes('askeri') || 
+            locStr.includes('askeri') || 
+            (matchedAirport && String(matchedAirport.type || '').toLowerCase('tr-TR').includes('askeri'));
+
+        if (isMilitaryLocation) {
+            return "https://bulut.ogm.gov.tr/askeri01";
+        }
+
+        const typeStr = String(record.receiptType || '').toLowerCase('tr-TR');
+        const noteStr = String(record.note || '').toLowerCase('tr-TR');
+        if (typeStr.includes('hasar') || typeStr.includes('atlan') || typeStr.includes('diğer') ||
+            noteStr.includes('hasar') || noteStr.includes('atlan') || noteStr.includes('diğer') ||
+            (record.fuelAmount === 0 && record.receiptNumber && record.receiptNumber !== '-' && record.receiptNumber !== '--')) {
+            return "https://bulut.ogm.gov.tr/hasarmakbuz01";
+        }
         if (record.recordType === 'tankerDolum' || record.recordType === 'tankerTransfer') {
             const plate = record.recordType === 'tankerDolum' ? record.tankerPlate : record.fillingTankerPlate;
             const tanker = tankerData.find(t => t.plate === plate);
@@ -2923,7 +3051,7 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
 
             if (record.tailNumber) {
                 const aircraft = aircraftData.find(a => a.tailNumber === record.tailNumber);
-                if (!aircraft) return null;
+                if (!aircraft) return "https://bulut.ogm.gov.tr/hasarmakbuz01";
                 const comp = (aircraft.company || "").toLowerCase().trim();
                 
                 if (comp === "ogm" || comp === "orman") {
@@ -2933,7 +3061,7 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
                 }
             }
         }
-        return null;
+        return "https://bulut.ogm.gov.tr/hasarmakbuz01";
     };
 
     const handleExport = (format) => {
@@ -3716,7 +3844,7 @@ const CriticalErrorDisplay = ({ message }) => {
     );
 };
 
-const ReceiptBookManagement = ({ receiptBooks, tankerData, onUpdate, showMessage, isReadOnly }) => {
+const ReceiptBookManagement = ({ receiptBooks, tankerData, onUpdate, showMessage, isReadOnly, receiptBookApprovalRequests = [], onRequestDelete }) => {
     const [newBook, setNewBook] = useState({ tankerPlate: '', startSerial: '', endSerial: '' });
     
     const handleInputChange = (e) => {
@@ -3747,10 +3875,20 @@ const ReceiptBookManagement = ({ receiptBooks, tankerData, onUpdate, showMessage
         setNewBook({ tankerPlate: '', startSerial: '', endSerial: '' });
     };
 
-    const handleDelete = (idToDelete) => {
-        const updatedList = receiptBooks.filter(book => book.id !== idToDelete);
-        onUpdate(updatedList);
-        showMessage('Kayıt silindi.', 'success');
+    const handleDelete = (book) => {
+        if (isReadOnly) {
+            if (typeof onRequestDelete === 'function') {
+                onRequestDelete(book);
+            } else {
+                const updatedList = receiptBooks.map(b => b.id === book.id ? { ...b, pendingDeletion: true, pendingDeleteRequestedBy: 'Kiralık Tanker Sorumlusu Oturumu' } : b);
+                onUpdate(updatedList);
+            }
+            showMessage('Kiralık tanker sorumlusu oturumu seri no silme talebi iletildi. Yönetici onayı bekleniyor.', 'info');
+        } else {
+            const updatedList = receiptBooks.filter(b => b.id !== book.id);
+            onUpdate(updatedList);
+            showMessage('Kayıt silindi.', 'success');
+        }
     };
 
     const handleExport = () => {
@@ -3799,16 +3937,24 @@ const ReceiptBookManagement = ({ receiptBooks, tankerData, onUpdate, showMessage
                             )
                         ),
                         React.createElement("tbody", { className: "divide-y divide-slate-200" },
-                            receiptBooks.map(book => (
-                                React.createElement("tr", { key: book.id },
-                                    React.createElement("td", { className: "text-left" }, book.tankerPlate),
-                                    React.createElement("td", { className: "text-right" }, book.startSerial),
-                                    React.createElement("td", { className: "text-right" }, book.endSerial),
-                                    React.createElement("td", { "data-exclude": "true", className: "text-left" }, 
-                                        !isReadOnly ? React.createElement("button", { onClick: () => handleDelete(book.id), className: "text-red-500 hover:text-red-700 font-semibold" }, "Sil") : '--'
+                            receiptBooks.map(book => {
+                                const isPendingDelete = book.pendingDeletion || (receiptBookApprovalRequests && receiptBookApprovalRequests.some(r => r.bookId === book.id || r.id === `rb-del-${book.id}`));
+                                return React.createElement("tr", { key: book.id, className: isPendingDelete ? "bg-amber-50/70" : undefined },
+                                    React.createElement("td", { className: `text-left ${isPendingDelete ? 'blur-[1px] opacity-60 select-none text-slate-500 font-semibold' : ''}` }, book.tankerPlate),
+                                    React.createElement("td", { className: `text-right ${isPendingDelete ? 'blur-[1px] opacity-60 select-none text-slate-500' : ''}` }, book.startSerial),
+                                    React.createElement("td", { className: `text-right ${isPendingDelete ? 'blur-[1px] opacity-60 select-none text-slate-500' : ''}` }, book.endSerial),
+                                    React.createElement("td", { "data-exclude": "true", className: "text-left" },
+                                        isPendingDelete ? (
+                                            React.createElement("span", { className: "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300 shadow-sm" },
+                                                React.createElement("span", { className: "w-2 h-2 rounded-full bg-amber-500 animate-pulse" }),
+                                                "İşlem Beklemede"
+                                            )
+                                        ) : (
+                                            React.createElement("button", { onClick: () => handleDelete(book), className: "text-red-500 hover:text-red-700 font-semibold cursor-pointer" }, "Sil")
+                                        )
                                     )
-                                )
-                            ))
+                                );
+                            })
                         )
                     )
                 )
@@ -4134,21 +4280,45 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                 for (let i = book.startSerial; i <= book.endSerial; i++) {
                     const record = recordsBySerial[i];
                     if (record) {
+                        const recTypeStr = String(record.receiptType || '').toLowerCase('tr-TR');
+                        const recNoteStr = String(record.note || '').toLowerCase('tr-TR');
+                        const isDamagedOrMissing = Boolean(
+                            (recTypeStr && /[a-zA-ZğüşıöçĞÜŞİÖÇ]/.test(recTypeStr) && (
+                                recTypeStr.includes('hasar') || recTypeStr.includes('atlan') || recTypeStr.includes('eksik') || recTypeStr.includes('diğer') || recTypeStr.includes('iptal')
+                            )) ||
+                            (recNoteStr && (
+                                recNoteStr.includes('hasar') || recNoteStr.includes('atlan') || recNoteStr.includes('eksik') || recNoteStr.includes('diğer') || recNoteStr.includes('iptal')
+                            )) ||
+                            (Number(record.fuelAmount) === 0 && record.receiptNumber && record.receiptNumber !== '-')
+                        );
+
+                        let status = 'Kullanıldı';
+                        let statusClass = 'text-green-700 font-bold bg-green-100 px-2 py-0.5 rounded text-xs';
+                        if (isDamagedOrMissing) {
+                            status = 'Hasarlı / Eksik Kaydı';
+                            statusClass = 'text-amber-800 font-bold bg-amber-100 border border-amber-300 px-2 py-0.5 rounded text-xs shadow-2xs';
+                        }
+
+                        const displayNote = (record.note && record.note !== '-' && record.note !== 'Sistem Kaydı') 
+                            ? record.note 
+                            : ((record.receiptType && record.receiptType !== '-') ? record.receiptType : record.crossTankerNote || '-');
+
                         list.push({
                             serial: i,
                             plate: tanker.plate,
                             region: tanker.region || 'Bölge Belirtilmemiş',
                             bookRange: `${book.startSerial}-${book.endSerial}`,
-                            status: 'Kullanıldı',
-                            statusClass: 'text-green-700 font-bold bg-green-100 px-2 py-0.5 rounded text-xs',
-                            transactionType: record.transactionType,
+                            status,
+                            statusClass,
+                            isDamagedOrMissingRecord: isDamagedOrMissing,
+                            transactionType: record.transactionType || (isDamagedOrMissing ? 'Eksik / Hasar Takip Kaydı' : 'Hava Aracı İkmal'),
                             fuelAmount: Number(record.fuelAmount) || 0,
                             receiptDate: record.date ? formatDisplayDateOnly(record.date) : '-',
                             recordDate: record.kayitNumarasi ? formatDisplayDate(record.kayitNumarasi) : '-',
                             personnel: record.personnelName || '-',
                             tailNumber: record.tailNumber || '-',
                             location: record.location || '-',
-                            note: record.crossTankerNote || '-'
+                            note: displayNote
                         });
                     } else {
                         const hasUsedBefore = bookUsedSerials.some(s => s < i);
@@ -4172,6 +4342,7 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                             bookRange: `${book.startSerial}-${book.endSerial}`,
                             status,
                             statusClass,
+                            isDamagedOrMissingRecord: false,
                             transactionType: '-',
                             fuelAmount: 0,
                             receiptDate: '-',
@@ -4192,6 +4363,7 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
     const totalCount = allReceiptsList.length;
     const usedCount = useMemo(() => allReceiptsList.filter(r => r.status === 'Kullanıldı').length, [allReceiptsList]);
     const missingCount = useMemo(() => allReceiptsList.filter(r => r.status.includes('yazılmamış')).length, [allReceiptsList]);
+    const damagedCount = useMemo(() => allReceiptsList.filter(r => r.isDamagedOrMissingRecord || r.status.includes('Hasarlı') || r.status.includes('Eksik Kaydı')).length, [allReceiptsList]);
     const unusedCount = useMemo(() => allReceiptsList.filter(r => r.status.includes('Kullanılmamış')).length, [allReceiptsList]);
 
     const filteredAllReceiptsList = useMemo(() => {
@@ -4200,6 +4372,8 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
             list = list.filter(item => item.status === 'Kullanıldı');
         } else if (statusFilter === 'missing') {
             list = list.filter(item => item.status.includes('yazılmamış') || item.status.includes('Eksik'));
+        } else if (statusFilter === 'damaged') {
+            list = list.filter(item => item.isDamagedOrMissingRecord || item.status.includes('Hasarlı') || item.status.includes('Eksik Kaydı'));
         } else if (statusFilter === 'unused') {
             list = list.filter(item => item.status.includes('Kullanılmamış'));
         }
@@ -4213,7 +4387,8 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
             String(item.status).toLocaleLowerCase('tr-TR').includes(query) ||
             String(item.transactionType).toLocaleLowerCase('tr-TR').includes(query) ||
             String(item.personnel).toLocaleLowerCase('tr-TR').includes(query) ||
-            String(item.tailNumber).toLocaleLowerCase('tr-TR').includes(query)
+            String(item.tailNumber).toLocaleLowerCase('tr-TR').includes(query) ||
+            String(item.note).toLocaleLowerCase('tr-TR').includes(query)
         );
     }, [allReceiptsList, statusFilter, allReceiptsFilter]);
 
@@ -4229,64 +4404,104 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
 
     const handleRowDoubleClick = (item) => {
         setSelectedMissingReceipt(item);
-        setMissingReason('Makbuz Hasarlandı');
-        setMissingDescription('');
+        let initialReason = 'Makbuz Hasarlandı';
+        let initialDesc = '';
+        if (item.note && item.note !== '-' && item.note !== 'Sistem Kaydı') {
+            const match = item.note.match(/^(.*?)\s*\((.*)\)$/);
+            if (match) {
+                initialReason = match[1].trim() || 'Makbuz Hasarlandı';
+                initialDesc = match[2].trim();
+            } else {
+                initialDesc = item.note;
+            }
+        }
+        setMissingReason(initialReason);
+        setMissingDescription(initialDesc);
     };
 
     const handleSaveMissingReason = async () => {
         if (!selectedMissingReceipt) return;
 
-        let finalReason = missingReason;
-        if (missingReason === 'Diğer') {
-            if (!missingDescription.trim()) {
-                showMessage("Lütfen 'Diğer' seçeneği için bir açıklama giriniz.", 'error');
-                return;
-            }
-            finalReason = missingDescription.trim();
-        } else if (missingDescription.trim()) {
-            finalReason = `${missingReason} - ${missingDescription.trim()}`;
+        const desc = (missingDescription || '').trim();
+        const hasLetter = /[a-zA-ZğüşıöçĞÜŞİÖÇ]/.test(desc);
+
+        if (!desc || !hasLetter) {
+            showMessage("Açıklama alanına harf içeren geçerli bir açıklama yazılması zorunludur! Harf olmadan kaydetmek yasaktır.", 'error');
+            return;
         }
 
-        const recNo = generateRecordNumber();
-        const newRecord = {
-            id: recNo,
-            kayitNumarasi: recNo,
-            date: new Date().toISOString().split('T')[0],
-            receiptNumber: String(selectedMissingReceipt.serial),
-            receiptType: finalReason,
-            fuelAmount: 0,
-            recordType: 'personnel',
-            tailNumber: '-',
-            personnelName: '-',
-            jobTitle: '-',
-            cardNumber: '-',
-            locationType: '-',
-            location: selectedMissingReceipt.plate || '-',
-            note: finalReason
-        };
+        let finalReason = missingReason;
+        if (missingReason === 'Diğer') {
+            finalReason = `Diğer (${desc})`;
+        } else {
+            finalReason = `${missingReason} (${desc})`;
+        }
+
+        const serialStr = String(selectedMissingReceipt.serial);
+        const existingIndex = fuelRecords.findIndex(r => {
+            const matches = String(r.receiptNumber || '').match(/\d+/g);
+            return matches && matches.includes(serialStr);
+        });
 
         try {
-            if (typeof handleAddRecord === 'function') {
-                await handleAddRecord(newRecord);
-            } else if (typeof updateFuelRecords === 'function') {
-                await updateFuelRecords([...fuelRecords, newRecord]);
+            const isEdit = existingIndex !== -1;
+            if (isEdit) {
+                const updated = [...fuelRecords];
+                updated[existingIndex] = {
+                    ...updated[existingIndex],
+                    receiptType: finalReason,
+                    note: finalReason
+                };
+                if (typeof handleUpdateRecord === 'function') {
+                    await handleUpdateRecord(updated[existingIndex]);
+                } else if (typeof updateFuelRecords === 'function') {
+                    await updateFuelRecords(updated);
+                }
+            } else {
+                const recNo = generateRecordNumber();
+                const newRecord = {
+                    id: recNo,
+                    kayitNumarasi: recNo,
+                    date: new Date().toISOString().split('T')[0],
+                    receiptNumber: serialStr,
+                    receiptType: finalReason,
+                    fuelAmount: 0,
+                    recordType: 'personnel',
+                    tailNumber: '-',
+                    personnelName: '-',
+                    jobTitle: '-',
+                    cardNumber: '-',
+                    locationType: '-',
+                    location: selectedMissingReceipt.plate || '-',
+                    note: finalReason
+                };
+                if (typeof handleAddRecord === 'function') {
+                    await handleAddRecord(newRecord);
+                } else if (typeof updateFuelRecords === 'function') {
+                    await updateFuelRecords([...fuelRecords, newRecord]);
+                }
             }
+
             setSelectedMissingReceipt(null);
 
-            const redirectUrl = "https://bulut.ogm.gov.tr/HASARLI";
-            const redirectMsg = "KAYDEDİLDİ. HASARLI / İPTAL MAKBUZUN GÖRSELİNİ YÜKLEME ADIMINA YÖNLENDİRİLİYORSUNUZ...";
-
-            if (typeof onStartRedirection === 'function') {
-                onStartRedirection(redirectUrl, redirectMsg);
+            if (isEdit) {
+                showMessage("Hasarlı/eksik makbuz kaydı başarıyla güncellendi.", "success");
             } else {
-                showMessage("KAYDEDİLDİ. HASARLI / İPTAL MAKBUZUN GÖRSELİNİ YÜKLEME ADIMINA YÖNLENDİRİLİYORSUNUZ...", "success");
-                setTimeout(() => {
-                    window.location.href = redirectUrl;
-                }, 2000);
+                const redirectUrl = "https://bulut.ogm.gov.tr/hasarmakbuz01";
+                const redirectMsg = "KAYDEDİLDİ. HASARLI / İPTAL MAKBUZUN GÖRSELİNİ YÜKLEME ADIMINA YÖNLENDİRİLİYORSUNUZ...";
+
+                if (typeof onStartRedirection === 'function') {
+                    onStartRedirection(redirectUrl, redirectMsg);
+                } else {
+                    showMessage("KAYDEDİLDİ. HASARLI / İPTAL MAKBUZUN GÖRSELİNİ YÜKLEME ADIMINA YÖNLENDİRİLİYORSUNUZ...", "success");
+                    setTimeout(() => {
+                        window.location.href = redirectUrl;
+                    }, 2000);
+                }
             }
         } catch (err) {
             console.error("Makbuz kaydı hatası:", err);
-            showMessage("Makbuz kaydı eklenirken hata oluştu.", 'error');
+            showMessage("Makbuz kaydı eklenirken veya güncellenirken hata oluştu.", 'error');
         }
     };
 
@@ -4295,7 +4510,7 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
         React.createElement("div", { className: "space-y-6" },
             React.createElement("h2", { className: "text-xl font-semibold text-slate-700" }, "Bölge Tankeri Makbuz Takibi"),
             React.createElement("div", { className: "p-4 bg-black/5 rounded-lg border border-slate-200" },
-                 React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 items-end" },
+                 React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 items-end" },
                      React.createElement("div", null,
                         React.createElement("label", {className: "font-semibold text-slate-600 mb-2 block text-sm"}, "Başlangıç Tarihi:"),
                         React.createElement("input", { type: "date", name: "start", value: dateRange.start, onChange: handleDateChange, className: "w-full p-2 border rounded text-sm bg-white" })
@@ -4316,14 +4531,25 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                      ),
                      React.createElement("button", { 
                          onClick: () => setIsAllReceiptsModalOpen(true), 
-                         className: "w-full py-2 px-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-1.5 shadow-md text-sm" 
+                         className: "w-full py-2 px-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-1.5 shadow-md text-xs sm:text-sm" 
                      }, 
                         React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
                             React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" })
                         ),
                         "Tüm Makbuzları Görüntüle"
                      ),
-                     React.createElement("button", { onClick: handleGenerateReport, className: "w-full py-2 px-4 bg-ogm-green-600 text-white rounded-lg font-semibold hover:bg-ogm-green-700 text-sm shadow-md" }, "Ara")
+                     React.createElement("a", { 
+                         href: "https://bulut.ogm.gov.tr/hasarmakbuz01", 
+                         target: "_blank", 
+                         rel: "noopener noreferrer", 
+                         className: "w-full py-2 px-3 bg-amber-600 text-white rounded-lg font-bold hover:bg-amber-700 transition-colors flex items-center justify-center gap-1.5 shadow-md text-xs sm:text-sm cursor-pointer" 
+                     }, 
+                        React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
+                            React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" })
+                        ),
+                        "Klasöre Git"
+                     ),
+                     React.createElement("button", { onClick: handleGenerateReport, className: "w-full py-2 px-4 bg-ogm-green-600 text-white rounded-lg font-semibold hover:bg-ogm-green-700 text-xs sm:text-sm shadow-md" }, "Ara")
                  )
             ),
             report ? (
@@ -4440,6 +4666,16 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                             }, `Yüklenmemiş: ${missingCount}`),
                             React.createElement("button", {
                                 type: "button",
+                                onClick: () => setStatusFilter('damaged'),
+                                title: "Hasarlı / İptal / Eksik makbuz takip kayıtlarını filtrele",
+                                className: `px-3 py-1.5 rounded-full font-extrabold transition-all duration-200 cursor-pointer flex items-center gap-1.5 shadow-sm text-xs ${
+                                    statusFilter === 'damaged'
+                                        ? 'bg-amber-600 text-white ring-2 ring-amber-600 ring-offset-1 scale-105 shadow-md'
+                                        : 'bg-amber-100 text-amber-900 hover:bg-amber-200 hover:scale-102'
+                                }`
+                            }, `Hasarlı / Eksik Kaydı: ${damagedCount}`),
+                            React.createElement("button", {
+                                type: "button",
                                 onClick: () => setStatusFilter('unused'),
                                 title: "Sadece henüz kullanılmamış koçanları filtrele",
                                 className: `px-3 py-1.5 rounded-full font-extrabold transition-all duration-200 cursor-pointer flex items-center gap-1.5 shadow-sm text-xs ${
@@ -4457,6 +4693,15 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                                 placeholder: "Hızlı Ara (Plaka, Seri No, Personel)...", 
                                 className: "p-2 border border-slate-300 rounded text-xs w-full lg:w-64 bg-white shadow-sm focus:ring-2 focus:ring-ogm-green-500 outline-none" 
                             }),
+                            React.createElement("a", { 
+                                href: "https://bulut.ogm.gov.tr/hasarmakbuz01", 
+                                target: "_blank", 
+                                rel: "noopener noreferrer", 
+                                className: "py-2 px-3 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-bold transition-colors flex items-center gap-1.5 shrink-0 shadow-md cursor-pointer" 
+                            }, 
+                                React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 }, React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" })),
+                                "Klasöre Git"
+                            ),
                             React.createElement("button", { 
                                 onClick: exportAllReceiptsToExcel, 
                                 className: "py-2 px-3.5 bg-ogm-green-600 text-white rounded text-xs font-bold hover:bg-ogm-green-700 transition-colors flex items-center gap-1.5 shrink-0 shadow-md" 
@@ -4492,19 +4737,24 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                             ),
                             React.createElement("tbody", { className: "divide-y divide-slate-200" },
                                 filteredAllReceiptsList.length > 0 ? (
-                                    filteredAllReceiptsList.map((item, index) => (
-                                        React.createElement("tr", { 
+                                    filteredAllReceiptsList.map((item, index) => {
+                                        const hasValidLettersInNote = item.note && item.note !== '-' && item.note !== 'Sistem Kaydı' && /[a-zA-ZğüşıöçĞÜŞİÖÇ]/.test(item.note);
+                                        const isMissingExplanation = item.status.includes('yazılmamış') || ((item.isDamagedOrMissingRecord || item.status.includes('Hasarlı') || item.status.includes('Eksik')) && !hasValidLettersInNote);
+
+                                        return React.createElement("tr", { 
                                             key: `${item.plate}-${item.serial}-${index}`, 
                                             onDoubleClick: () => handleRowDoubleClick(item),
-                                            title: "Eksik / hasar veya işlem gerekçesi kaydetmek için çift tıklayın",
-                                            className: "hover:bg-amber-50/80 cursor-pointer transition-colors" 
+                                            title: "Açıklama / hasar gerekçesi eklemek veya güncellemek için çift tıklayın",
+                                            className: isMissingExplanation 
+                                                ? "blink-yellow-row cursor-pointer transition-colors font-medium text-slate-900" 
+                                                : "hover:bg-amber-50/80 cursor-pointer transition-colors"
                                         },
                                             React.createElement("td", { className: "font-bold text-slate-800" }, item.plate),
                                             React.createElement("td", { className: "text-slate-600" }, item.region),
                                             React.createElement("td", { className: "text-slate-500 font-mono text-[11px]" }, item.bookRange),
                                             React.createElement("td", { className: "font-extrabold text-blue-900 text-sm flex items-center justify-between gap-1" }, 
                                                 item.serial,
-                                                (item.status.includes('yazılmamış') || item.status.includes('Eksik')) && React.createElement("span", { className: "text-[9px] text-amber-800 bg-amber-100 border border-amber-300 px-1 rounded font-medium shrink-0 shadow-2xs" }, "Çift Tıkla")
+                                                (isMissingExplanation || item.status.includes('yazılmamış') || item.status.includes('Eksik') || item.isDamagedOrMissingRecord) && React.createElement("span", { className: "text-[9px] text-amber-900 bg-amber-200 border border-amber-400 px-1 rounded font-bold shrink-0 shadow-2xs" }, "Çift Tıkla")
                                             ),
                                             React.createElement("td", null, React.createElement("span", { className: item.statusClass }, item.status)),
                                             React.createElement("td", { className: "font-semibold text-slate-700" }, item.transactionType),
@@ -4512,9 +4762,13 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                                             React.createElement("td", null, item.receiptDate),
                                             React.createElement("td", null, item.recordDate),
                                             React.createElement("td", null, item.personnel !== '-' ? `${item.personnel} (${item.tailNumber})` : item.location),
-                                            React.createElement("td", { className: "italic text-slate-500 text-[11px]" }, item.note)
-                                        )
-                                    ))
+                                            React.createElement("td", { className: "italic text-[11px]" }, 
+                                                isMissingExplanation && (!hasValidLettersInNote) ? (
+                                                    React.createElement("span", { className: "inline-flex items-center gap-1 font-bold text-amber-900 bg-yellow-300 border border-yellow-500 px-1.5 py-0.5 rounded text-[10px]" }, "⚠️ Açıklama Ekle (Çift Tıkla)")
+                                                ) : item.note
+                                            )
+                                        );
+                                    })
                                 ) : (
                                     React.createElement("tr", null,
                                         React.createElement("td", { colSpan: 11, className: "p-6 text-center text-slate-500 italic" }, "Aramanızla veya seçtiğiniz durum filtresiyle eşleşen koçan veya makbuz kaydı bulunamadı.")
@@ -4571,13 +4825,13 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                         ),
                         React.createElement("div", { className: "space-y-1.5" },
                             React.createElement("label", { className: "block font-bold text-slate-700" },
-                                missingReason === 'Diğer' ? "Açıklama / Nedeni (Zorunlu):" : "Açıklama / Not (Opsiyonel):"
+                                "Açıklama / Nedeni (Zorunlu - Harf içeren açıklama yazılması şarttır):"
                             ),
                             React.createElement("textarea", {
                                 rows: 3,
                                 value: missingDescription,
                                 onChange: (e) => setMissingDescription(e.target.value),
-                                placeholder: missingReason === 'Diğer' ? "Lütfen eksik veya iptal nedenini detaylıca yazınız..." : "Ek not veya açıklama ekleyebilirsiniz...",
+                                placeholder: "Lütfen eksik, hasar veya işlem nedenini harf içeren detaylı bir açıklama ile giriniz (Zorunludur)...",
                                 className: "w-full p-2.5 border border-slate-300 rounded-lg text-xs bg-white focus:ring-2 focus:ring-ogm-green-500 outline-none"
                             })
                         ),
@@ -4652,7 +4906,10 @@ const AdminPanel = (props) => {
         if (isReadOnly && activeDataEntryView !== 'receiptBooks' && activeDataEntryView !== 'tanker') {
             setActiveDataEntryView('receiptBooks');
         }
-    }, [isReadOnly]);
+        if (isReadOnly && activeModule === 'approval') {
+            setActiveModule('dataEntry');
+        }
+    }, [isReadOnly, activeModule]);
 
     const downloadSampleTemplate = () => {
         const wb = XLSX.utils.book_new();
@@ -4813,7 +5070,7 @@ const AdminPanel = (props) => {
                     ),
                     React.createElement("div", { className: "mt-4" }, React.createElement(FileUpload, { onFileUpload: handleBulkFileUpload }))
                  ),
-                 activeDataEntryView === 'receiptBooks' && React.createElement(ReceiptBookManagement, { receiptBooks: props.receiptBooks, tankerData: props.tankerData, onUpdate: props.updateReceiptBooks, showMessage: props.showMessage, isReadOnly: isReadOnly }),
+                 activeDataEntryView === 'receiptBooks' && React.createElement(ReceiptBookManagement, { receiptBooks: props.receiptBooks, tankerData: props.tankerData, onUpdate: props.updateReceiptBooks, showMessage: props.showMessage, isReadOnly: isReadOnly, receiptBookApprovalRequests: props.receiptBookApprovalRequests, onRequestDelete: props.onRequestDeleteReceiptBook }),
                  activeDataEntryView === 'aircraft' && React.createElement(AircraftDataManagement, { aircraftData: props.aircraftData, onUpdate: props.updateAircraftData, showMessage: props.showMessage }),
                  activeDataEntryView === 'airport' && React.createElement(AirportDataManagement, { airportList: props.airportList, onUpdate: props.updateAirportList, showMessage: props.showMessage }),
                  activeDataEntryView === 'tanker' && React.createElement(TankerDataManagement, { tankerData: props.tankerData, onUpdate: props.updateTankerData, showMessage: props.showMessage, isReadOnly: isReadOnly }),
@@ -4825,6 +5082,8 @@ const AdminPanel = (props) => {
     if (!props.currentUser) {
         return React.createElement(AdminLogin, { onLoginSuccess: props.setCurrentUser, showMessage: props.showMessage, adminCredentials: props.adminCredentials });
     }
+
+    const approvalBadgeCount = (props.approvalRequests?.length || 0) + (props.personnelApprovalRequests?.length || 0) + (props.receiptBookApprovalRequests?.length || 0) + (props.receiptBooks?.filter(b => b.pendingDeletion)?.length || 0);
 
     return (
         React.createElement("div", { className: "flex flex-col md:flex-row gap-6" },
@@ -4842,7 +5101,7 @@ const AdminPanel = (props) => {
                     React.createElement(NavButton, { label: "Bölge Makbuz Takip", onClick: () => setActiveModule('regionReceiptTracking'), isActive: activeModule === 'regionReceiptTracking' },
                          React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-5 w-5 mr-3", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: "2" }, React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" }))
                     ),
-                    React.createElement(NavButton, { label: "Talep Onay", badge: props.approvalRequests.length + props.personnelApprovalRequests.length, onClick: () => setActiveModule('approval'), isActive: activeModule === 'approval' },
+                    !isReadOnly && React.createElement(NavButton, { label: "Talep Onay", badge: approvalBadgeCount, onClick: () => setActiveModule('approval'), isActive: activeModule === 'approval' },
                         React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-5 w-5 mr-3", viewBox: "0 0 20 20", fill: "currentColor" }, React.createElement("path", { fillRule: "evenodd", d: "M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z", clipRule: "evenodd" }))
                     ),
                      React.createElement(NavButton, { label: "Ayarlar", onClick: () => setActiveModule('settings'), isActive: activeModule === 'settings' },
@@ -4856,7 +5115,7 @@ const AdminPanel = (props) => {
                 activeModule === 'receipts' && React.createElement(RecordManagement, { fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, onUpdateFuelRecords: props.updateFuelRecords, aircraftData: props.aircraftData, tankerData: props.tankerData, airportList: props.airportList, showMessage: props.showMessage, onDeleteRecord: props.onDeleteRecord, undoBuffer: props.undoBuffer, setUndoBuffer: props.setUndoBuffer, conflictData: props.conflictData, setConflictData: props.setConflictData, personnelList: props.personnelList, currentUser: props.currentUser }),
                 activeModule === 'tankerTracking' && React.createElement(TankerTakip, { tankerData: props.tankerData, fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, showMessage: props.showMessage }),
                 activeModule === 'regionReceiptTracking' && React.createElement(RegionReceiptTracking, { tankerData: props.tankerData, fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, receiptBooks: props.receiptBooks, showMessage: props.showMessage, handleAddRecord: props.handleAddRecord, updateFuelRecords: props.updateFuelRecords, onStartRedirection: props.onStartRedirection }),
-                activeModule === 'approval' && React.createElement(ApprovalRequestsComponent, { approvalRequests: props.approvalRequests, personnelApprovalRequests: props.personnelApprovalRequests, onHandleEditApproval: props.handleEditApproval, onHandlePersonnelApproval: props.handlePersonnelApproval, showMessage: props.showMessage, fuelRecords: props.fuelRecords }),
+                activeModule === 'approval' && React.createElement(ApprovalRequestsComponent, { approvalRequests: props.approvalRequests, personnelApprovalRequests: props.personnelApprovalRequests, receiptBookApprovalRequests: props.receiptBookApprovalRequests, receiptBooks: props.receiptBooks, onHandleEditApproval: props.handleEditApproval, onHandlePersonnelApproval: props.handlePersonnelApproval, onHandleReceiptBookApproval: props.handleReceiptBookApproval, showMessage: props.showMessage, fuelRecords: props.fuelRecords }),
                 activeModule === 'settings' && React.createElement(UserManagement, { adminCredentials: props.adminCredentials, onAddUser: props.addAdminUser, onDeleteUser: props.deleteAdminUser, showMessage: props.showMessage })
             )
         )
@@ -4955,6 +5214,7 @@ const App = () => {
     const [adminCredentials, setAdminCredentials] = useState([{ id: 'user-0', name: 'OGM Admin', username: 'ogm', password: '1839' }]);
     const [airportList, setAirportList] = useState(INITIAL_AIRPORT_LIST);
     const [receiptBooks, setReceiptBooks] = useState([]);
+    const [receiptBookApprovalRequests, setReceiptBookApprovalRequests] = useState([]);
     const [ogmRecords, setOgmRecords] = useState([]);
     
     const [undoBuffer, setUndoBuffer] = useState(null);
@@ -4974,6 +5234,36 @@ const App = () => {
                 window.location.href = url;
             }, 1000);
         }, 2000);
+    };
+
+    const getLocalFallbackData = () => {
+        try {
+            const fuelRecords = JSON.parse(localStorage.getItem('ogm_fuel_records') || '[]');
+            const aircrafts = JSON.parse(localStorage.getItem('ogm_aircrafts') || '[]');
+            const tankers = JSON.parse(localStorage.getItem('ogm_tankers') || '[]');
+            const personnel = JSON.parse(localStorage.getItem('ogm_personnel') || '[]');
+            const airports = JSON.parse(localStorage.getItem('ogm_airports') || '[]');
+            const receiptBooks = JSON.parse(localStorage.getItem('ogm_receipt_books') || '[]');
+            return {
+                fuelRecords,
+                aircrafts,
+                tankers,
+                personnel: personnel.length > 0 ? personnel : INITIAL_PERSONNEL_LIST,
+                admins: [{ id: 'user-0', name: 'OGM Admin', username: 'ogm', password: '1839' }],
+                airports: airports.length > 0 ? airports : INITIAL_AIRPORT_LIST,
+                receiptBooks
+            };
+        } catch(e) {
+            return {
+                fuelRecords: [],
+                aircrafts: [],
+                tankers: [],
+                personnel: INITIAL_PERSONNEL_LIST,
+                admins: [{ id: 'user-0', name: 'OGM Admin', username: 'ogm', password: '1839' }],
+                airports: INITIAL_AIRPORT_LIST,
+                receiptBooks: []
+            };
+        }
     };
 
     const postData = async (action, payload) => {
@@ -5008,12 +5298,19 @@ const App = () => {
             return result;
 
         } catch (error) {
-            console.error(`"postData" hatası (eylem: "${action}"):`, error);
+            const isReadAction = typeof action === 'string' && action.startsWith('onGet');
+            if (isReadAction) {
+                if (action === 'onGetAdminPanelData') {
+                    return { status: 'success', data: getLocalFallbackData() };
+                }
+                return { status: 'success', data: [] };
+            }
+
             if (error.message && (error.message.includes('SPREADSHEET_ID') || error.message.includes('E-Tablo Açılamadı'))) {
-            } else if (error.message.includes('Failed to fetch')) {
+            } else if (error.message && error.message.includes('Failed to fetch')) {
                  showMessage('Ağ Hatası: Sunucuya ulaşılamadı. Lütfen internet bağlantınızı kontrol edin.', 'error');
             } else {
-                showMessage(`İşlem Başarısız: ${error.message}`, 'error');
+                 showMessage(`İşlem Başarısız: ${error.message}`, 'error');
             }
             throw error;
         } finally {
@@ -5153,10 +5450,11 @@ const App = () => {
             try {
                 setIsLoading(true);
                 setCriticalError(null);
-                const [panelDataResult, approvalRequestsResult, personnelApprovalRequestsResult] = await Promise.all([
-                    postData('onGetAdminPanelData', null),
-                    postData('onGetApprovalRequests', null),
-                    postData('onGetPersonnelApprovalRequests', null)
+                const [panelDataResult, approvalRequestsResult, personnelApprovalRequestsResult, receiptBookApprovalRequestsResult] = await Promise.all([
+                    postData('onGetAdminPanelData', null).catch(() => ({ data: getLocalFallbackData() })),
+                    postData('onGetApprovalRequests', null).catch(() => ({ data: [] })),
+                    postData('onGetPersonnelApprovalRequests', null).catch(() => ({ data: [] })),
+                    postData('onGetReceiptBookApprovalRequests', null).catch(() => ({ data: [] }))
                 ]);
 
                 const panelData = panelDataResult.data;
@@ -5175,6 +5473,12 @@ const App = () => {
                 setAirportList(typedAirports.length > 0 ? typedAirports : INITIAL_AIRPORT_LIST);
 
                 setReceiptBooks(panelData.receiptBooks || []);
+                
+                const loadedReceiptBookRequests = (receiptBookApprovalRequestsResult && Array.isArray(receiptBookApprovalRequestsResult.data) && receiptBookApprovalRequestsResult.data.length > 0)
+                    ? receiptBookApprovalRequestsResult.data
+                    : (panelData.receiptBookApprovalRequests || []);
+                setReceiptBookApprovalRequests(loadedReceiptBookRequests);
+
                 setApprovalRequests(normalizeApprovals(approvalRequestsResult.data));
                 setPersonnelApprovalRequests(personnelApprovalRequestsResult.data || []);
 
@@ -5304,6 +5608,42 @@ const App = () => {
         fetchData();
     }, []);
 
+    useEffect(() => {
+        if (fuelRecords && fuelRecords.length > 0) {
+            try { localStorage.setItem('ogm_fuel_records', JSON.stringify(fuelRecords)); } catch(e){}
+        }
+    }, [fuelRecords]);
+
+    useEffect(() => {
+        if (aircraftData && aircraftData.length > 0) {
+            try { localStorage.setItem('ogm_aircrafts', JSON.stringify(aircraftData)); } catch(e){}
+        }
+    }, [aircraftData]);
+
+    useEffect(() => {
+        if (tankerData && tankerData.length > 0) {
+            try { localStorage.setItem('ogm_tankers', JSON.stringify(tankerData)); } catch(e){}
+        }
+    }, [tankerData]);
+
+    useEffect(() => {
+        if (personnelList && personnelList.length > 0) {
+            try { localStorage.setItem('ogm_personnel', JSON.stringify(personnelList)); } catch(e){}
+        }
+    }, [personnelList]);
+
+    useEffect(() => {
+        if (airportList && airportList.length > 0) {
+            try { localStorage.setItem('ogm_airports', JSON.stringify(airportList)); } catch(e){}
+        }
+    }, [airportList]);
+
+    useEffect(() => {
+        if (receiptBooks && receiptBooks.length > 0) {
+            try { localStorage.setItem('ogm_receipt_books', JSON.stringify(receiptBooks)); } catch(e){}
+        }
+    }, [receiptBooks]);
+
     const handleBulkUpdate = async (updates) => {
         const denormalizedUpdates = {};
         if (updates.aircraftData) denormalizedUpdates.aircraftData = updates.aircraftData;
@@ -5312,6 +5652,7 @@ const App = () => {
         if (updates.airportList) denormalizedUpdates.airportList = updates.airportList;
         if (updates.admins) denormalizedUpdates.admins = updates.admins;
         if (updates.receiptBooks) denormalizedUpdates.receiptBooks = updates.receiptBooks;
+        if (updates.receiptBookApprovalRequests) denormalizedUpdates.receiptBookApprovalRequests = updates.receiptBookApprovalRequests;
         if (updates.fuelRecords) {
             denormalizedUpdates.fuelRecords = updates.fuelRecords.map(deNormalizeRecord);
         }
@@ -5324,6 +5665,7 @@ const App = () => {
         if (updates.airportList) setAirportList(updates.airportList);
         if (updates.admins) setAdminCredentials(updates.admins);
         if (updates.receiptBooks) setReceiptBooks(updates.receiptBooks);
+        if (updates.receiptBookApprovalRequests) setReceiptBookApprovalRequests(updates.receiptBookApprovalRequests);
         if (updates.fuelRecords) setFuelRecords(updates.fuelRecords);
     };
 
@@ -5399,6 +5741,49 @@ const App = () => {
         setPersonnelList(result.data.personnelList);
         setPersonnelApprovalRequests(result.data.personnelApprovalRequests);
         showMessage(`Personel talebi ${approved ? 'onaylandı' : 'reddedildi'}.`, 'success');
+    };
+
+    const handleReceiptBookDeleteRequest = async (book) => {
+        const newReq = {
+            id: `rb-del-${book.id}`,
+            bookId: book.id,
+            tankerPlate: book.tankerPlate,
+            startSerial: book.startSerial,
+            endSerial: book.endSerial,
+            requestedBy: 'Kiralık Tanker Sorumlusu Oturumu',
+            type: 'receiptBookDelete',
+            timestamp: new Date().toISOString()
+        };
+        const updatedRequests = [...receiptBookApprovalRequests.filter(r => r.bookId !== book.id), newReq];
+        const updatedBooks = receiptBooks.map(b => b.id === book.id ? { ...b, pendingDeletion: true, pendingDeleteRequestedBy: 'Kiralık Tanker Sorumlusu Oturumu' } : b);
+        
+        try {
+            await postData('onAddReceiptBookApprovalRequest', newReq);
+        } catch (err) {
+            console.warn('onAddReceiptBookApprovalRequest warning, syncing via bulk payload:', err);
+        }
+        await handleBulkUpdate({ receiptBooks: updatedBooks, receiptBookApprovalRequests: updatedRequests });
+    };
+
+    const handleReceiptBookApproval = async (request, approved) => {
+        const targetId = request.bookId || request.id.replace('rb-del-', '');
+        const updatedRequests = receiptBookApprovalRequests.filter(r => r.id !== request.id && r.bookId !== targetId);
+        
+        if (approved) {
+            const updatedBooks = receiptBooks.filter(b => b.id !== targetId);
+            try {
+                await postData('onApproveReceiptBookRequest', { requestId: request.id, bookId: targetId });
+            } catch (err) {}
+            await handleBulkUpdate({ receiptBooks: updatedBooks, receiptBookApprovalRequests: updatedRequests });
+            showMessage('Kiralık tanker sorumlusu oturumu seri no silme talebi onaylandı. Koçan serisi silindi.', 'success');
+        } else {
+            const updatedBooks = receiptBooks.map(b => b.id === targetId ? { ...b, pendingDeletion: false, pendingDeleteRequestedBy: null } : b);
+            try {
+                await postData('onRejectReceiptBookRequest', { requestId: request.id, bookId: targetId });
+            } catch (err) {}
+            await handleBulkUpdate({ receiptBooks: updatedBooks, receiptBookApprovalRequests: updatedRequests });
+            showMessage('Kiralık tanker sorumlusu oturumu seri no silme talebi reddedildi.', 'info');
+        }
     };
 
     const updateAircraftData = (data) => handleBulkUpdate({ aircraftData: data });
@@ -5480,6 +5865,7 @@ const App = () => {
                                 personnelList: personnelList,
                                 approvalRequests: approvalRequests,
                                 personnelApprovalRequests: personnelApprovalRequests,
+                                receiptBookApprovalRequests: receiptBookApprovalRequests,
                                 adminCredentials: adminCredentials,
                                 airportList: airportList,
                                 receiptBooks: receiptBooks,
@@ -5494,6 +5880,8 @@ const App = () => {
                                 updateFuelRecords: updateFuelRecords,
                                 handleEditApproval: handleEditApproval,
                                 handlePersonnelApproval: handlePersonnelApproval,
+                                onRequestDeleteReceiptBook: handleReceiptBookDeleteRequest,
+                                handleReceiptBookApproval: handleReceiptBookApproval,
                                 onBulkUpdate: handleBulkUpdate,
                                 undoBuffer: undoBuffer,
                                 setUndoBuffer: setUndoBuffer,
