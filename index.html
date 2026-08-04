@@ -3685,8 +3685,8 @@ const FileUpload = ({ onFileUpload }) => {
     );
 };
 
-const CriticalErrorDisplay = ({ message }) => {
-    const parts = message.split('\n\n');
+const CriticalErrorDisplay = ({ message, onBypass }) => {
+    const parts = (message || '').split('\n\n');
     const title = parts.length > 0 ? parts[0] : 'Kritik Hata';
     const instructions = parts.slice(1);
 
@@ -3707,9 +3707,23 @@ const CriticalErrorDisplay = ({ message }) => {
                     )
                 ),
                 React.createElement("div", { className: "text-slate-700 space-y-4 bg-red-50/50 p-6 rounded-lg border border-red-200" },
-                    instructions.map((instruction, index) => (
-                        React.createElement("p", { key: index, className: "whitespace-pre-wrap leading-relaxed" }, instruction)
-                    ))
+                    instructions.length > 0 ? (
+                        instructions.map((instruction, index) => (
+                            React.createElement("p", { key: index, className: "whitespace-pre-wrap leading-relaxed" }, instruction)
+                        ))
+                    ) : (
+                        React.createElement("p", { className: "leading-relaxed" }, message)
+                    )
+                ),
+                React.createElement("div", { className: "mt-6 flex flex-wrap gap-3 justify-end" },
+                    React.createElement("button", {
+                        onClick: () => window.location.reload(),
+                        className: "py-2.5 px-5 bg-ogm-green-600 text-white rounded-lg font-bold hover:bg-ogm-green-700 transition-colors shadow-md"
+                    }, "Yeniden Dene"),
+                    onBypass && React.createElement("button", {
+                        onClick: onBypass,
+                        className: "py-2.5 px-5 bg-slate-700 text-white rounded-lg font-bold hover:bg-slate-800 transition-colors shadow-md"
+                    }, "Çevrimdışı / Yerel Modda Devam Et")
                 )
             )
         )
@@ -4992,10 +5006,13 @@ const App = () => {
 
             let result;
             try {
+                if (!responseText || responseText.trim().startsWith('<')) {
+                    throw new Error('Sunucu HTML hata sayfası veya erişim engeli döndürdü (404/Yetkisiz).');
+                }
                 result = JSON.parse(responseText);
             } catch (jsonError) {
-                console.error('Failed to parse JSON response:', responseText);
-                throw new Error(`Sunucudan geçersiz veya boş bir yanıt alındı. HTTP Durumu: ${res.status}`);
+                console.warn('Failed to parse JSON response:', responseText.substring(0, 150));
+                throw new Error(jsonError.message.includes('HTML') ? jsonError.message : `Sunucudan geçersiz veya boş bir yanıt alındı. HTTP Durumu: ${res.status}`);
             }
 
             if (result.status !== 'success' && result.success !== true) {
@@ -5011,8 +5028,10 @@ const App = () => {
             console.error(`"postData" hatası (eylem: "${action}"):`, error);
             if (error.message && (error.message.includes('SPREADSHEET_ID') || error.message.includes('E-Tablo Açılamadı'))) {
             } else if (error.message.includes('Failed to fetch')) {
-                 showMessage('Ağ Hatası: Sunucuya ulaşılamadı. Lütfen internet bağlantınızı kontrol edin.', 'error');
-            } else {
+                if (!action.startsWith('onGet')) {
+                    showMessage('Ağ Hatası: Sunucuya ulaşılamadı. Lütfen internet bağlantınızı kontrol edin.', 'error');
+                }
+            } else if (!action.startsWith('onGet')) {
                 showMessage(`İşlem Başarısız: ${error.message}`, 'error');
             }
             throw error;
@@ -5153,30 +5172,57 @@ const App = () => {
             try {
                 setIsLoading(true);
                 setCriticalError(null);
-                const [panelDataResult, approvalRequestsResult, personnelApprovalRequestsResult] = await Promise.all([
-                    postData('onGetAdminPanelData', null),
-                    postData('onGetApprovalRequests', null),
-                    postData('onGetPersonnelApprovalRequests', null)
-                ]);
 
-                const panelData = panelDataResult.data;
-                const personnelData = panelData.personnel && panelData.personnel.length > 0 ? panelData.personnel : INITIAL_PERSONNEL_LIST;
+                let panelDataResult = null;
+                let approvalRequestsResult = null;
+                let personnelApprovalRequestsResult = null;
 
-                const normalizedFuelRecords = (panelData.fuelRecords || []).map((rec) => normalizeSheetRecord(rec, personnelData)).filter(Boolean);
+                try {
+                    panelDataResult = await postData('onGetAdminPanelData', null);
+                } catch (err) {
+                    console.warn("Google Apps Script 'onGetAdminPanelData' ulaşılamadı veya hata döndü:", err);
+                }
 
-                setFuelRecords(normalizedFuelRecords);
-                setAircraftData(panelData.aircrafts || []);
-                setTankerData(panelData.tankers || []);
-                setPersonnelList(personnelData);
-                setAdminCredentials(panelData.admins && panelData.admins.length > 0 ? panelData.admins : [{ id: 'user-0', name: 'OGM Admin', username: 'ogm', password: '1839' }]);
-                
-                const typedAirports = (panelData.airports || [])
-                    .filter((a) => a && typeof a.id === 'string' && typeof a.name === 'string' && (a.type === 'Sivil' || a.type === 'Askeri'));
-                setAirportList(typedAirports.length > 0 ? typedAirports : INITIAL_AIRPORT_LIST);
+                try {
+                    approvalRequestsResult = await postData('onGetApprovalRequests', null);
+                } catch (err) {
+                    console.warn("Google Apps Script 'onGetApprovalRequests' ulaşılamadı veya hata döndü:", err);
+                }
 
-                setReceiptBooks(panelData.receiptBooks || []);
-                setApprovalRequests(normalizeApprovals(approvalRequestsResult.data));
-                setPersonnelApprovalRequests(personnelApprovalRequestsResult.data || []);
+                try {
+                    personnelApprovalRequestsResult = await postData('onGetPersonnelApprovalRequests', null);
+                } catch (err) {
+                    console.warn("Google Apps Script 'onGetPersonnelApprovalRequests' ulaşılamadı veya hata döndü:", err);
+                }
+
+                if (panelDataResult && panelDataResult.data) {
+                    const panelData = panelDataResult.data;
+                    const personnelData = panelData.personnel && panelData.personnel.length > 0 ? panelData.personnel : INITIAL_PERSONNEL_LIST;
+                    const normalizedFuelRecords = (panelData.fuelRecords || []).map((rec) => normalizeSheetRecord(rec, personnelData)).filter(Boolean);
+
+                    setFuelRecords(normalizedFuelRecords);
+                    setAircraftData(panelData.aircrafts || []);
+                    setTankerData(panelData.tankers || []);
+                    setPersonnelList(personnelData);
+                    setAdminCredentials(panelData.admins && panelData.admins.length > 0 ? panelData.admins : [{ id: 'user-0', name: 'OGM Admin', username: 'ogm', password: '1839' }]);
+                    
+                    const typedAirports = (panelData.airports || [])
+                        .filter((a) => a && typeof a.id === 'string' && typeof a.name === 'string' && (a.type === 'Sivil' || a.type === 'Askeri'));
+                    setAirportList(typedAirports.length > 0 ? typedAirports : INITIAL_AIRPORT_LIST);
+                    setReceiptBooks(panelData.receiptBooks || []);
+                } else {
+                    console.warn("Arka uç verisi alınamadı. Başlangıç varsayılan listeleri yükleniyor.");
+                    setPersonnelList(INITIAL_PERSONNEL_LIST);
+                    setAirportList(INITIAL_AIRPORT_LIST);
+                }
+
+                if (approvalRequestsResult && approvalRequestsResult.data) {
+                    setApprovalRequests(normalizeApprovals(approvalRequestsResult.data));
+                }
+
+                if (personnelApprovalRequestsResult && personnelApprovalRequestsResult.data) {
+                    setPersonnelApprovalRequests(personnelApprovalRequestsResult.data || []);
+                }
 
                 // Load OGM Aircraft Data Script URL
                 try {
@@ -5193,8 +5239,12 @@ const App = () => {
                         if (ogmRes.ok) {
                             const ogmText = await ogmRes.text();
                             console.log("OGM POST Raw length:", ogmText.length);
-                            ogmJson = JSON.parse(ogmText);
-                            console.log("OGM POST response parsed as JSON.");
+                            if (ogmText && !ogmText.trim().startsWith('<')) {
+                                ogmJson = JSON.parse(ogmText);
+                                console.log("OGM POST response parsed as JSON.");
+                            } else {
+                                console.warn("OGM POST response returned HTML/empty instead of JSON.");
+                            }
                         } else {
                             console.warn("OGM POST response status not ok:", ogmRes.status);
                         }
@@ -5218,8 +5268,12 @@ const App = () => {
                             if (ogmResGet.ok) {
                                 const ogmTextGet = await ogmResGet.text();
                                 console.log("OGM GET Raw length:", ogmTextGet.length);
-                                ogmJson = JSON.parse(ogmTextGet);
-                                console.log("OGM GET response parsed as JSON.");
+                                if (ogmTextGet && !ogmTextGet.trim().startsWith('<')) {
+                                    ogmJson = JSON.parse(ogmTextGet);
+                                    console.log("OGM GET response parsed as JSON.");
+                                } else {
+                                    console.warn("OGM GET response returned HTML/empty instead of JSON.");
+                                }
                             } else {
                                 console.warn("OGM GET response status not ok:", ogmResGet.status);
                             }
@@ -5286,17 +5340,6 @@ const App = () => {
 
             } catch (error) {
                 console.error("Failed to fetch initial data:", error);
-                if (error.message && (error.message.includes('SPREADSHEET_ID') || error.message.includes('E-Tablo Açılamadı'))) {
-                    setCriticalError(
-                        "Uygulama Başlatılamadı: Arka Uç Yapılandırma Hatası\n\n" +
-                        "Google E-Tablosu'na bağlanılamıyor. Lütfen aşağıdaki adımları kontrol edin:\n\n" +
-                        "1. Google Apps Script projenizdeki `Code.js` dosyasını açın.\n\n" +
-                        "2. `SPREADSHEET_ID` değişkeninin doğru E-Tablo kimliği ile ayarlandığından emin olun.\n\n" +
-                        "3. Komut dosyasını dağıtan Google hesabının yetkisini kontrol edin."
-                    );
-                } else {
-                     setCriticalError("Uygulama Başlatılamadı: Arka Uç Sunucusuna Bağlanılamadı");
-                }
             } finally {
                 setIsLoading(false);
             }
@@ -5427,7 +5470,7 @@ const App = () => {
     }
 
     if (criticalError) {
-        return React.createElement(CriticalErrorDisplay, { message: criticalError });
+        return React.createElement(CriticalErrorDisplay, { message: criticalError, onBypass: () => setCriticalError(null) });
     }
 
     return (
