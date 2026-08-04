@@ -4001,7 +4001,7 @@ const CriticalErrorDisplay = ({ message, onBypass }) => {
                     React.createElement("button", {
                         onClick: () => window.location.reload(),
                         className: "py-2.5 px-5 bg-ogm-green-600 text-white rounded-lg font-bold hover:bg-ogm-green-700 transition-colors shadow-md"
-                    }, "Yeniden Dene"),
+                    }, "Sayfayı Yenile"),
                     onBypass && React.createElement("button", {
                         onClick: onBypass,
                         className: "py-2.5 px-5 bg-slate-700 text-white rounded-lg font-bold hover:bg-slate-800 transition-colors shadow-md"
@@ -5515,6 +5515,7 @@ const App = () => {
                     return ogmJson;
                 };
 
+                let panelDataError = null;
                 const [
                     panelDataResult,
                     approvalRequestsResult,
@@ -5523,6 +5524,7 @@ const App = () => {
                 ] = await Promise.all([
                     postData('onGetAdminPanelData', null).catch(err => {
                         console.warn("Google Apps Script 'onGetAdminPanelData' ulaşılamadı veya hata döndü:", err);
+                        panelDataError = err;
                         return null;
                     }),
                     postData('onGetApprovalRequests', null).catch(err => {
@@ -5539,26 +5541,26 @@ const App = () => {
                     })
                 ]);
 
-                if (panelDataResult && panelDataResult.data) {
-                    const panelData = panelDataResult.data;
-                    const personnelData = panelData.personnel && panelData.personnel.length > 0 ? panelData.personnel : INITIAL_PERSONNEL_LIST;
-                    const normalizedFuelRecords = (panelData.fuelRecords || []).map((rec) => normalizeSheetRecord(rec, personnelData)).filter(Boolean);
-
-                    setFuelRecords(normalizedFuelRecords);
-                    setAircraftData(panelData.aircrafts || []);
-                    setTankerData(panelData.tankers || []);
-                    setPersonnelList(personnelData);
-                    setAdminCredentials(panelData.admins && panelData.admins.length > 0 ? panelData.admins : [{ id: 'user-0', name: 'OGM Admin', username: 'ogm', password: '1839' }]);
-                    
-                    const typedAirports = (panelData.airports || [])
-                        .filter((a) => a && typeof a.id === 'string' && typeof a.name === 'string' && (a.type === 'Sivil' || a.type === 'Askeri'));
-                    setAirportList(typedAirports.length > 0 ? typedAirports : INITIAL_AIRPORT_LIST);
-                    setReceiptBooks(panelData.receiptBooks || []);
-                } else {
-                    console.warn("Arka uç verisi alınamadı. Başlangıç varsayılan listeleri yükleniyor.");
-                    setPersonnelList(INITIAL_PERSONNEL_LIST);
-                    setAirportList(INITIAL_AIRPORT_LIST);
+                if (!panelDataResult || !panelDataResult.data) {
+                    const errorDetail = (panelDataError && panelDataError.message) || (panelDataResult && panelDataResult.message) || "Sunucuya veya E-Tabloya erişilemedi.";
+                    setCriticalError(`E-Tablo Sunucu Bağlantısı Sağlanamadı\n\nE-Tablo sunucusuna bağlantı sağlanamadı (${errorDetail}). Lütfen internet bağlantınızı ve sunucu ayarlarını kontrol edip sayfayı yenileyin.`);
+                    return;
                 }
+
+                const panelData = panelDataResult.data;
+                const personnelData = panelData.personnel && panelData.personnel.length > 0 ? panelData.personnel : INITIAL_PERSONNEL_LIST;
+                const normalizedFuelRecords = (panelData.fuelRecords || []).map((rec) => normalizeSheetRecord(rec, personnelData)).filter(Boolean);
+
+                setFuelRecords(normalizedFuelRecords);
+                setAircraftData(panelData.aircrafts || []);
+                setTankerData(panelData.tankers || []);
+                setPersonnelList(personnelData);
+                setAdminCredentials(panelData.admins && panelData.admins.length > 0 ? panelData.admins : [{ id: 'user-0', name: 'OGM Admin', username: 'ogm', password: '1839' }]);
+                
+                const typedAirports = (panelData.airports || [])
+                    .filter((a) => a && typeof a.id === 'string' && typeof a.name === 'string' && (a.type === 'Sivil' || a.type === 'Askeri'));
+                setAirportList(typedAirports.length > 0 ? typedAirports : INITIAL_AIRPORT_LIST);
+                setReceiptBooks(panelData.receiptBooks || []);
 
                 if (approvalRequestsResult && approvalRequestsResult.data) {
                     setApprovalRequests(normalizeApprovals(approvalRequestsResult.data));
