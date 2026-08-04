@@ -208,10 +208,6 @@ const RECEIPT_TYPE_DESCRIPTIONS = {
 
 const getReceiptTypeDisplay = (type) => {
     if (!type || type === '-' || type === '--') return '-';
-    const desc = RECEIPT_TYPE_DESCRIPTIONS[type];
-    if (desc) {
-        return `${type} (${desc})`;
-    }
     return type;
 };
 
