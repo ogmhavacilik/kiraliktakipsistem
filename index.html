@@ -152,7 +152,7 @@ import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 
 // From constants.ts
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxPF3hJzd4G27oaRjHHQY8X72gALxAzxbfDFo1RJJAfJbwuyfbZt1FL68rP7IdeghJdAA/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxGOrppHEe0ZJqqmF-Tz7CSJpyp5f2BaabrvtyVPYGuLBV0YtJVvfDhBwWbgoLvnw5rGA/exec";
 // ogm hava araçları verisi scripti
 const OGM_AIRCRAFT_DATA_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwJVvXLX84N_79x_Yik_flkQ1jjr70Krwqnj6vJ77gUnCSlUcs9oq2MkKpTy2ZIwtU/exec";
 
@@ -198,6 +198,21 @@ const RECORD_TYPE_TRANSLATIONS = {
     personnel: 'Hava Aracı İkmal',
     tankerDolum: 'Tanker Dolum',
     tankerTransfer: 'Tanker Transfer'
+};
+
+const RECEIPT_TYPE_DESCRIPTIONS = {
+    "Yangın Maksatlı kalkış": "OGM emriyle Yangın,intikal Tatbikat uçuşu öncesi ve sonrası yakıt alımı",
+    "Test bakım": "Firma talebiyle yapılan Test uçuşu, İntikal uçuşu , yer çalıştırması, bakım sonrası alınan yakıt",
+    "Atık yakıt makbuzu": "Atık yakıt makbuzu"
+};
+
+const getReceiptTypeDisplay = (type) => {
+    if (!type || type === '-' || type === '--') return '-';
+    const desc = RECEIPT_TYPE_DESCRIPTIONS[type];
+    if (desc) {
+        return `${type} (${desc})`;
+    }
+    return type;
 };
 
 const getCurrentMonthDates = () => {
@@ -2030,10 +2045,69 @@ const TankerDataManagement = ({ tankerData, onUpdate, showMessage, isReadOnly })
     );
 };
 
-const ApprovalRequestsComponent = ({ approvalRequests, personnelApprovalRequests, onHandleEditApproval, onHandlePersonnelApproval, fuelRecords }) => {
+const ApprovalRequestsComponent = ({
+    approvalRequests = [],
+    personnelApprovalRequests = [],
+    onHandleEditApproval,
+    onHandlePersonnelApproval,
+    fuelRecords = [],
+    dismissedDuplicateKeys = [],
+    onDismissDuplicate,
+    onDeleteRecord,
+    bookDeletionRequests = [],
+    onApproveBookDeletion,
+    onRejectBookDeletion,
+    showMessage
+}) => {
     const [selectedRequest, setSelectedRequest] = useState(null);
     const [selectedPersonnelRequest, setSelectedPersonnelRequest] = useState(null);
+    const [selectedDuplicate, setSelectedDuplicate] = useState(null);
+    const [selectedDeleteIds, setSelectedDeleteIds] = useState([]);
+    const [selectedBookDeletion, setSelectedBookDeletion] = useState(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    useEffect(() => {
+        if (selectedDuplicate) {
+            const rec2 = selectedDuplicate.duplicate || (selectedDuplicate.records && selectedDuplicate.records[1]);
+            if (rec2) {
+                setSelectedDeleteIds([rec2.id]);
+            } else if (selectedDuplicate.existing) {
+                setSelectedDeleteIds([selectedDuplicate.existing.id]);
+            } else {
+                setSelectedDeleteIds([]);
+            }
+        } else {
+            setSelectedDeleteIds([]);
+        }
+    }, [selectedDuplicate]);
+
+    const toggleDeleteRecord = (id) => {
+        if (!id) return;
+        setSelectedDeleteIds(prev => 
+            prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+        );
+    };
+
+    // Group duplicate records by receipt number
+    const pendingDuplicates = useMemo(() => {
+        if (!fuelRecords || fuelRecords.length === 0) return [];
+        const groups = {};
+        fuelRecords.forEach(rec => {
+            const rNo = String(rec.receiptNumber || '').trim();
+            if (rNo && rNo !== '-' && rNo !== '--' && !dismissedDuplicateKeys.includes(rNo)) {
+                if (!groups[rNo]) groups[rNo] = [];
+                groups[rNo].push(rec);
+            }
+        });
+        return Object.entries(groups)
+            .filter(([rNo, list]) => list.length > 1)
+            .map(([rNo, list]) => ({
+                receiptNumber: rNo,
+                records: list,
+                existing: list[0],
+                duplicate: list[1]
+            }));
+    }, [fuelRecords, dismissedDuplicateKeys]);
 
     // Group personnel approval requests by name
     const uniquePersonnelRequests = useMemo(() => {
@@ -2125,6 +2199,37 @@ const ApprovalRequestsComponent = ({ approvalRequests, personnelApprovalRequests
         }
     };
 
+    const handleApproveDuplicate = async () => {
+        if (!selectedDuplicate || isSubmitting) return;
+        if (selectedDeleteIds.length === 0) {
+            if (showMessage) showMessage("Lütfen silinecek kaydın kutucuğunu (tik) işaretleyiniz.", "error");
+            return;
+        }
+        setIsSubmitting(true);
+        try {
+            for (const idToDelete of selectedDeleteIds) {
+                if (onDeleteRecord) {
+                    await onDeleteRecord(idToDelete, true);
+                }
+            }
+            if (showMessage) showMessage(`Makbuz No: ${selectedDuplicate.receiptNumber} seçilen mükerrer kayıt(lar) silindi.`, 'success');
+            setSelectedDuplicate(null);
+        } catch (error) {
+            console.error("Duplicate deletion failed.", error);
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    const handleKeepDuplicate = () => {
+        if (!selectedDuplicate) return;
+        if (onDismissDuplicate) {
+            onDismissDuplicate(selectedDuplicate.receiptNumber);
+        }
+        if (showMessage) showMessage(`Makbuz No: ${selectedDuplicate.receiptNumber} kaydı sistemde tutuldu.`, 'success');
+        setSelectedDuplicate(null);
+    };
+
     const renderChanges = (original, changes) => {
         const originalObj = typeof original === 'string' ? JSON.parse(original) : original;
         const changesObj = typeof changes === 'string' ? JSON.parse(changes) : changes;
@@ -2194,6 +2299,7 @@ const ApprovalRequestsComponent = ({ approvalRequests, personnelApprovalRequests
 
     return (
         React.createElement("div", { className: "space-y-6" },
+            // Section 1: Bekleyen Düzeltme Talepleri
             React.createElement("div", null,
                 React.createElement("h2", { className: "text-xl font-semibold text-slate-700 mb-4" }, "Bekleyen Düzeltme Talepleri"),
                 React.createElement("div", { className: "overflow-x-auto border border-slate-200 rounded-lg shadow-md" },
@@ -2226,7 +2332,104 @@ const ApprovalRequestsComponent = ({ approvalRequests, personnelApprovalRequests
                     )
                 )
             ),
-             React.createElement("div", null,
+
+            // Section 2: Bekleyen Mükerrer Kayıt Talepleri
+            React.createElement("div", null,
+                React.createElement("h2", { className: "text-xl font-semibold text-amber-800 mb-4 flex items-center gap-2" },
+                    React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-6 w-6 text-amber-600", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
+                        React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" })
+                    ),
+                    "Bekleyen Mükerrer Kayıt Talepleri"
+                ),
+                React.createElement("div", { className: "overflow-x-auto border border-amber-200 rounded-lg shadow-md bg-amber-50/30" },
+                    React.createElement("table", { className: "excel-table" },
+                        React.createElement("thead", null,
+                            React.createElement("tr", { className: "bg-amber-100/80" },
+                                ['Makbuz No', 'Kayıt Adedi', '1. Kayıt (Tarih / Personel / Miktar)', '2. Kayıt (Tarih / Personel / Miktar)', 'İşlem'].map(header => (
+                                    React.createElement("th", { key: header, className: "text-amber-900 font-bold" }, header)
+                                ))
+                            )
+                        ),
+                        React.createElement("tbody", { className: "divide-y divide-amber-200" },
+                            pendingDuplicates.length > 0 ? (
+                                pendingDuplicates.map((dup) => {
+                                    const rec1 = dup.existing;
+                                    const rec2 = dup.duplicate;
+                                    return React.createElement("tr", { 
+                                        key: dup.receiptNumber, 
+                                        onClick: () => setSelectedDuplicate(dup), 
+                                        className: "hover:bg-amber-100/60 cursor-pointer transition-colors" 
+                                    },
+                                        React.createElement("td", { className: "p-3 font-extrabold text-blue-900 text-sm" }, dup.receiptNumber),
+                                        React.createElement("td", { className: "p-3 font-bold text-amber-800" }, `${dup.records.length} adet mükerrer`),
+                                        React.createElement("td", { className: "p-3 text-xs" }, rec1 ? `${formatDisplayDateOnly(rec1.date)} | ${rec1.personnelName || '-'} | ${rec1.fuelAmount} lt` : '-'),
+                                        React.createElement("td", { className: "p-3 text-xs" }, rec2 ? `${formatDisplayDateOnly(rec2.date)} | ${rec2.personnelName || '-'} | ${rec2.fuelAmount} lt` : '-'),
+                                        React.createElement("td", { className: "p-3" },
+                                            React.createElement("button", {
+                                                type: "button",
+                                                onClick: (e) => { e.stopPropagation(); setSelectedDuplicate(dup); },
+                                                className: "px-3 py-1 bg-amber-600 text-white rounded text-xs font-bold hover:bg-amber-700 shadow-sm"
+                                            }, "İncele / Onayla")
+                                        )
+                                    );
+                                })
+                            ) : (
+                                React.createElement("tr", null,
+                                    React.createElement("td", { colSpan: 5, className: "text-center p-6 text-slate-500" }, "Bekleyen mükerrer kayıt talebi bulunmamaktadır.")
+                                )
+                            )
+                        )
+                    )
+                )
+            ),
+
+            // Section 3: Bekleyen Koçan Seri Silme Talepleri (Caner Oturumu Talepleri)
+            React.createElement("div", null,
+                React.createElement("h2", { className: "text-xl font-semibold text-rose-800 mb-4 flex items-center gap-2" },
+                    React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-6 w-6 text-rose-600", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
+                        React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" })
+                    ),
+                    "Bekleyen Koçan Seri Silme Talepleri"
+                ),
+                React.createElement("div", { className: "overflow-x-auto border border-rose-200 rounded-lg shadow-md bg-rose-50/30" },
+                    React.createElement("table", { className: "excel-table" },
+                        React.createElement("thead", null,
+                            React.createElement("tr", { className: "bg-rose-100/80" },
+                                ['Tanker Plakası', 'Başlangıç No', 'Bitiş No', 'Talep Eden', 'Talep Tarihi', 'İşlem'].map(header => (
+                                    React.createElement("th", { key: header, className: "text-rose-900 font-bold" }, header)
+                                ))
+                            )
+                        ),
+                        React.createElement("tbody", { className: "divide-y divide-rose-200" },
+                            bookDeletionRequests.length > 0 ? (
+                                bookDeletionRequests.map((req) => (
+                                    React.createElement("tr", { key: req.id, onClick: () => setSelectedBookDeletion(req), className: "hover:bg-rose-100/60 cursor-pointer" },
+                                        React.createElement("td", { className: "p-3 font-bold text-slate-800" }, req.book?.tankerPlate || '-'),
+                                        React.createElement("td", { className: "p-3 font-mono" }, req.book?.startSerial || '-'),
+                                        React.createElement("td", { className: "p-3 font-mono" }, req.book?.endSerial || '-'),
+                                        React.createElement("td", { className: "p-3 font-semibold text-rose-900" }, req.requesterName || 'Caner'),
+                                        React.createElement("td", { className: "p-3 text-xs" }, new Date(req.timestamp).toLocaleString('tr-TR')),
+                                        React.createElement("td", { className: "p-3" },
+                                            React.createElement("button", {
+                                                type: "button",
+                                                onClick: (e) => { e.stopPropagation(); setSelectedBookDeletion(req); },
+                                                className: "px-3 py-1 bg-rose-600 text-white rounded text-xs font-bold hover:bg-rose-700 shadow-sm"
+                                            }, "İncele / Onayla")
+                                        )
+                                    )
+                                ))
+                            ) : (
+                                React.createElement("tr", null,
+                                    React.createElement("td", { colSpan: 6, className: "text-center p-6 text-slate-500" }, "Bekleyen koçan seri silme talebi bulunmamaktadır.")
+                                )
+                            )
+                        )
+                    )
+                )
+            ),
+
+            // Section 4: Yeni Personel Kayıt Talepleri
+            React.createElement("div", null,
                 React.createElement("h2", { className: "text-xl font-semibold text-slate-700 mb-4" }, "Yeni Personel Kayıt Talepleri"),
                  React.createElement("div", { className: "overflow-x-auto border border-slate-200 rounded-lg shadow-md" },
                     React.createElement("table", { className: "excel-table" },
@@ -2258,6 +2461,8 @@ const ApprovalRequestsComponent = ({ approvalRequests, personnelApprovalRequests
                     )
                 )
             ),
+
+            // Modal 1: Edit Request
             React.createElement(Modal, {
                 isOpen: !!selectedRequest,
                 onClose: () => setSelectedRequest(null),
@@ -2280,6 +2485,112 @@ const ApprovalRequestsComponent = ({ approvalRequests, personnelApprovalRequests
                     )
                 )
             ),
+
+            // Modal 2: Duplicate Request Modal with Checkbox Selection
+            React.createElement(Modal, {
+                isOpen: !!selectedDuplicate,
+                onClose: () => setSelectedDuplicate(null),
+                title: `Mükerrer Kayıt Onay Talebi (Makbuz No: ${selectedDuplicate?.receiptNumber || ''})`
+            },
+                selectedDuplicate && React.createElement("div", { className: "space-y-4" },
+                    React.createElement("div", { className: "p-3 bg-amber-50 border border-amber-300 rounded-lg text-amber-900 text-xs font-medium leading-relaxed" },
+                        "Aşağıda aynı makbuz numarasına sahip kayıtlar listelenmiştir. Silinmesini istediğiniz kaydın/kayıtların ",
+                        React.createElement("strong", { className: "text-red-700 font-bold" }, "tik kutucuğunu"),
+                        " işaretleyip ",
+                        React.createElement("strong", { className: "text-red-700 font-bold" }, "Seçili Kaydı Sil"),
+                        " butonuna tıklayınız. İkisini de korumak için ",
+                        React.createElement("strong", { className: "text-amber-800 font-bold" }, "Kalsın (İkisini de Tut)"),
+                        " butonuna tıklayınız."
+                    ),
+                    React.createElement("div", { className: "grid grid-cols-1 md:grid-cols-2 gap-3" },
+                        (selectedDuplicate.records && selectedDuplicate.records.length > 0
+                            ? selectedDuplicate.records
+                            : [selectedDuplicate.existing, selectedDuplicate.duplicate].filter(Boolean)
+                        ).map((rec, index) => {
+                            const isChecked = selectedDeleteIds.includes(rec.id);
+                            return React.createElement("div", {
+                                key: rec.id || index,
+                                onClick: () => toggleDeleteRecord(rec.id),
+                                className: `p-3.5 rounded-lg border-2 transition-all cursor-pointer space-y-2 text-xs relative ${
+                                    isChecked
+                                        ? "bg-red-50/80 border-red-500 ring-2 ring-red-200 shadow-md"
+                                        : "bg-white border-slate-200 hover:border-amber-300 shadow-sm"
+                                }`
+                            },
+                                React.createElement("div", { className: "flex justify-between items-center border-b pb-2" },
+                                    React.createElement("label", { className: "flex items-center gap-2.5 font-bold cursor-pointer text-slate-800 text-sm" },
+                                        React.createElement("input", {
+                                            type: "checkbox",
+                                            checked: isChecked,
+                                            onChange: (e) => { e.stopPropagation(); toggleDeleteRecord(rec.id); },
+                                            className: "w-4 h-4 text-red-600 rounded focus:ring-red-500 cursor-pointer accent-red-600"
+                                        }),
+                                        `${index + 1}. Kayıt`
+                                    ),
+                                    isChecked
+                                        ? React.createElement("span", { className: "px-2 py-0.5 rounded text-[10px] font-extrabold bg-red-100 text-red-700 border border-red-300" }, "Silinecek Seçildi")
+                                        : React.createElement("span", { className: "px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600" }, "Koru")
+                                ),
+                                React.createElement("div", null, React.createElement("span", { className: "text-slate-500 font-medium" }, "Kayıt No: "), rec.kayitNumarasi || '-'),
+                                React.createElement("div", null, React.createElement("span", { className: "text-slate-500 font-medium" }, "Tarih: "), rec.date ? formatDisplayDateOnly(rec.date) : '-'),
+                                React.createElement("div", null, React.createElement("span", { className: "text-slate-500 font-medium" }, "Personel: "), rec.personnelName || '-'),
+                                React.createElement("div", null, React.createElement("span", { className: "text-slate-500 font-medium" }, "Miktar: "), React.createElement("strong", { className: isChecked ? "text-red-700 font-bold" : "text-slate-900" }, `${rec.fuelAmount || 0} lt`)),
+                                React.createElement("div", null, React.createElement("span", { className: "text-slate-500 font-medium" }, "Konum: "), rec.location || '-')
+                            );
+                        })
+                    ),
+                    React.createElement("div", { className: "flex justify-end gap-3 pt-3 border-t border-slate-200" },
+                        React.createElement("button", {
+                            type: "button",
+                            onClick: handleKeepDuplicate,
+                            className: "py-2 px-5 bg-amber-600 text-white rounded-lg font-bold text-xs hover:bg-amber-700 transition-colors shadow-md cursor-pointer"
+                        }, "Kalsın (Silme, İkisini de Tut)"),
+                        React.createElement("button", {
+                            type: "button",
+                            onClick: handleApproveDuplicate,
+                            disabled: isSubmitting,
+                            className: "py-2 px-5 bg-red-600 text-white rounded-lg font-bold text-xs hover:bg-red-700 transition-colors shadow-md cursor-pointer disabled:bg-slate-400"
+                        }, isSubmitting ? 'İşleniyor...' : selectedDeleteIds.length > 0 ? `Seçilen (${selectedDeleteIds.length}) Kaydı Sil` : 'Seçileni Sil')
+                    )
+                )
+            ),
+
+            // Modal 3: Book Deletion Modal
+            React.createElement(Modal, {
+                isOpen: !!selectedBookDeletion,
+                onClose: () => setSelectedBookDeletion(null),
+                title: "Koçan Seri Silme Onay Talebi"
+            },
+                selectedBookDeletion && React.createElement("div", { className: "space-y-4 text-xs sm:text-sm" },
+                    React.createElement("div", { className: "p-3 bg-slate-50 border rounded-lg space-y-1.5" },
+                        React.createElement("div", { className: "flex justify-between" }, React.createElement("span", { className: "text-slate-500" }, "Tanker Plakası:"), React.createElement("span", { className: "font-bold text-slate-800" }, selectedBookDeletion.book?.tankerPlate)),
+                        React.createElement("div", { className: "flex justify-between" }, React.createElement("span", { className: "text-slate-500" }, "Seri Aralığı:"), React.createElement("span", { className: "font-mono font-bold" }, `${selectedBookDeletion.book?.startSerial} - ${selectedBookDeletion.book?.endSerial}`)),
+                        React.createElement("div", { className: "flex justify-between" }, React.createElement("span", { className: "text-slate-500" }, "Talep Eden Personel:"), React.createElement("span", { className: "font-bold text-rose-900" }, selectedBookDeletion.requesterName)),
+                        React.createElement("div", { className: "flex justify-between" }, React.createElement("span", { className: "text-slate-500" }, "Talep Zamanı:"), React.createElement("span", null, new Date(selectedBookDeletion.timestamp).toLocaleString('tr-TR')))
+                    ),
+                    React.createElement("p", { className: "text-slate-600 text-xs" }, "Bu koçan serisinin silinmesi, koçan takip tablosundan silinmesini sağlayacaktır. Onaylıyor musunuz?"),
+                    React.createElement("div", { className: "flex justify-end gap-3 pt-2 border-t" },
+                        React.createElement("button", {
+                            type: "button",
+                            onClick: () => {
+                                if (onRejectBookDeletion) onRejectBookDeletion(selectedBookDeletion.id);
+                                setSelectedBookDeletion(null);
+                            },
+                            className: "py-2 px-5 bg-red-500 text-white rounded-lg font-bold text-xs hover:bg-red-600"
+                        }, "Reddet"),
+                        React.createElement("button", {
+                            type: "button",
+                            onClick: () => {
+                                if (onApproveBookDeletion) onApproveBookDeletion(selectedBookDeletion.id, selectedBookDeletion.bookId);
+                                setSelectedBookDeletion(null);
+                            },
+                            className: "py-2 px-5 bg-green-600 text-white rounded-lg font-bold text-xs hover:bg-green-700"
+                        }, "Onayla")
+                    )
+                )
+            ),
+
+            // Modal 4: Personnel Request Modal
             React.createElement(Modal, { isOpen: !!selectedPersonnelRequest, onClose: () => setSelectedPersonnelRequest(null), title: "Yeni Personel Onay Talebi" },
                 selectedPersonnelRequest && (
                     React.createElement("div", { className: "space-y-4" },
@@ -2792,33 +3103,8 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
 
             return true;
         });
-        
-        const seenMap = new Map();
-        const filteredAfterDeduplication = [];
-        filtered.forEach(rec => {
-           const rNo = String(rec.receiptNumber).trim();
-           const amt = Number(parseFloat(String(rec.fuelAmount).replace(',', '.')));
-           if (rNo && rNo !== '-' && rNo !== '--') {
-              if (seenMap.has(rNo)) {
-                 const prev = seenMap.get(rNo);
-                 if (!prev.isOgmSystemRecord && !rec.isOgmSystemRecord && Number(parseFloat(String(prev.fuelAmount).replace(',', '.'))) === amt) {
-                    onDeleteRecord(prev.id);
-                    setUndoBuffer(prev);
-                    showMessage("Mükerrer kayıt tespit edildi ve otomatik silindi.", "success");
-                 } else {
-                    setConflictData({ existing: prev, incoming: rec });
-                    filteredAfterDeduplication.push(rec);
-                 }
-              } else {
-                 seenMap.set(rNo, rec);
-                 filteredAfterDeduplication.push(rec);
-              }
-           } else {
-             filteredAfterDeduplication.push(rec);
-           }
-        });
 
-        setDisplayedRecords(filteredAfterDeduplication);
+        setDisplayedRecords(filtered);
         setHasSearched(true);
         setSelectedIds(new Set());
     };
@@ -3075,7 +3361,7 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
                                     React.createElement("td", { className: "text-left" }, record.location || '--'),
                                     React.createElement("td", { className: "text-left" }, record.cardNumber || '-'),
                                     React.createElement("td", { className: "text-left" }, record.receiptNumber || '--'),
-                                    React.createElement("td", { className: "text-left" }, record.receiptType || '-'),
+                                    React.createElement("td", { className: "text-left" }, getReceiptTypeDisplay(record.receiptType)),
                                     React.createElement("td", { className: "text-left" }, record.tailNumber || '-'),
                                     React.createElement("td", { className: "text-left text-xs font-mono" }, record.relatedDolumId ? formatDisplayDate(record.relatedDolumId) : '-'),
                                     React.createElement("td", { 
@@ -3730,7 +4016,7 @@ const CriticalErrorDisplay = ({ message, onBypass }) => {
     );
 };
 
-const ReceiptBookManagement = ({ receiptBooks, tankerData, onUpdate, showMessage, isReadOnly }) => {
+const ReceiptBookManagement = ({ receiptBooks, tankerData, onUpdate, showMessage, isReadOnly, currentUser, onRequestBookDeletion }) => {
     const [newBook, setNewBook] = useState({ tankerPlate: '', startSerial: '', endSerial: '' });
     
     const handleInputChange = (e) => {
@@ -3762,9 +4048,23 @@ const ReceiptBookManagement = ({ receiptBooks, tankerData, onUpdate, showMessage
     };
 
     const handleDelete = (idToDelete) => {
-        const updatedList = receiptBooks.filter(book => book.id !== idToDelete);
-        onUpdate(updatedList);
-        showMessage('Kayıt silindi.', 'success');
+        const bookObj = receiptBooks.find(book => book.id === idToDelete);
+        const isCanerSession = isReadOnly || (currentUser && (
+            String(currentUser.username || '').toLowerCase().trim() === 'caner' ||
+            String(currentUser.name || '').toLowerCase().trim().includes('caner')
+        ));
+
+        if (isCanerSession) {
+            if (onRequestBookDeletion && bookObj) {
+                onRequestBookDeletion(bookObj);
+            } else {
+                showMessage('Koçan seri silme talebi admin panelindeki talepler kısmına gönderildi.', 'success');
+            }
+        } else {
+            const updatedList = receiptBooks.filter(book => book.id !== idToDelete);
+            onUpdate(updatedList);
+            showMessage('Kayıt silindi.', 'success');
+        }
     };
 
     const handleExport = () => {
@@ -3815,11 +4115,14 @@ const ReceiptBookManagement = ({ receiptBooks, tankerData, onUpdate, showMessage
                         React.createElement("tbody", { className: "divide-y divide-slate-200" },
                             receiptBooks.map(book => (
                                 React.createElement("tr", { key: book.id },
-                                    React.createElement("td", { className: "text-left" }, book.tankerPlate),
-                                    React.createElement("td", { className: "text-right" }, book.startSerial),
-                                    React.createElement("td", { className: "text-right" }, book.endSerial),
+                                    React.createElement("td", { className: "text-left font-semibold text-slate-800" }, book.tankerPlate),
+                                    React.createElement("td", { className: "text-right font-mono" }, book.startSerial),
+                                    React.createElement("td", { className: "text-right font-mono" }, book.endSerial),
                                     React.createElement("td", { "data-exclude": "true", className: "text-left" }, 
-                                        !isReadOnly ? React.createElement("button", { onClick: () => handleDelete(book.id), className: "text-red-500 hover:text-red-700 font-semibold" }, "Sil") : '--'
+                                        React.createElement("button", { 
+                                            onClick: () => handleDelete(book.id), 
+                                            className: "text-red-600 hover:text-red-800 font-bold bg-red-50 hover:bg-red-100 px-2.5 py-1 rounded border border-red-200 text-xs transition-colors shadow-2xs cursor-pointer" 
+                                        }, "Sil")
                                     )
                                 )
                             ))
@@ -4827,7 +5130,7 @@ const AdminPanel = (props) => {
                     ),
                     React.createElement("div", { className: "mt-4" }, React.createElement(FileUpload, { onFileUpload: handleBulkFileUpload }))
                  ),
-                 activeDataEntryView === 'receiptBooks' && React.createElement(ReceiptBookManagement, { receiptBooks: props.receiptBooks, tankerData: props.tankerData, onUpdate: props.updateReceiptBooks, showMessage: props.showMessage, isReadOnly: isReadOnly }),
+                 activeDataEntryView === 'receiptBooks' && React.createElement(ReceiptBookManagement, { receiptBooks: props.receiptBooks, tankerData: props.tankerData, onUpdate: props.updateReceiptBooks, showMessage: props.showMessage, isReadOnly: isReadOnly, currentUser: props.currentUser, onRequestBookDeletion: props.onRequestBookDeletion }),
                  activeDataEntryView === 'aircraft' && React.createElement(AircraftDataManagement, { aircraftData: props.aircraftData, onUpdate: props.updateAircraftData, showMessage: props.showMessage }),
                  activeDataEntryView === 'airport' && React.createElement(AirportDataManagement, { airportList: props.airportList, onUpdate: props.updateAirportList, showMessage: props.showMessage }),
                  activeDataEntryView === 'tanker' && React.createElement(TankerDataManagement, { tankerData: props.tankerData, onUpdate: props.updateTankerData, showMessage: props.showMessage, isReadOnly: isReadOnly }),
@@ -4856,7 +5159,7 @@ const AdminPanel = (props) => {
                     React.createElement(NavButton, { label: "Bölge Makbuz Takip", onClick: () => setActiveModule('regionReceiptTracking'), isActive: activeModule === 'regionReceiptTracking' },
                          React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-5 w-5 mr-3", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: "2" }, React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" }))
                     ),
-                    React.createElement(NavButton, { label: "Talep Onay", badge: props.approvalRequests.length + props.personnelApprovalRequests.length, onClick: () => setActiveModule('approval'), isActive: activeModule === 'approval' },
+                    React.createElement(NavButton, { label: "Talep Onay", badge: props.approvalRequests.length + props.personnelApprovalRequests.length + (props.bookDeletionRequests ? props.bookDeletionRequests.length : 0), onClick: () => setActiveModule('approval'), isActive: activeModule === 'approval' },
                         React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-5 w-5 mr-3", viewBox: "0 0 20 20", fill: "currentColor" }, React.createElement("path", { fillRule: "evenodd", d: "M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z", clipRule: "evenodd" }))
                     ),
                      React.createElement(NavButton, { label: "Ayarlar", onClick: () => setActiveModule('settings'), isActive: activeModule === 'settings' },
@@ -4870,7 +5173,7 @@ const AdminPanel = (props) => {
                 activeModule === 'receipts' && React.createElement(RecordManagement, { fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, onUpdateFuelRecords: props.updateFuelRecords, aircraftData: props.aircraftData, tankerData: props.tankerData, airportList: props.airportList, showMessage: props.showMessage, onDeleteRecord: props.onDeleteRecord, undoBuffer: props.undoBuffer, setUndoBuffer: props.setUndoBuffer, conflictData: props.conflictData, setConflictData: props.setConflictData, personnelList: props.personnelList, currentUser: props.currentUser }),
                 activeModule === 'tankerTracking' && React.createElement(TankerTakip, { tankerData: props.tankerData, fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, showMessage: props.showMessage }),
                 activeModule === 'regionReceiptTracking' && React.createElement(RegionReceiptTracking, { tankerData: props.tankerData, fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, receiptBooks: props.receiptBooks, showMessage: props.showMessage, handleAddRecord: props.handleAddRecord, updateFuelRecords: props.updateFuelRecords, onStartRedirection: props.onStartRedirection }),
-                activeModule === 'approval' && React.createElement(ApprovalRequestsComponent, { approvalRequests: props.approvalRequests, personnelApprovalRequests: props.personnelApprovalRequests, onHandleEditApproval: props.handleEditApproval, onHandlePersonnelApproval: props.handlePersonnelApproval, showMessage: props.showMessage, fuelRecords: props.fuelRecords }),
+                activeModule === 'approval' && React.createElement(ApprovalRequestsComponent, { approvalRequests: props.approvalRequests, personnelApprovalRequests: props.personnelApprovalRequests, bookDeletionRequests: props.bookDeletionRequests, onApproveBookDeletion: props.onApproveBookDeletion, onRejectBookDeletion: props.onRejectBookDeletion, onHandleEditApproval: props.handleEditApproval, onHandlePersonnelApproval: props.handlePersonnelApproval, showMessage: props.showMessage, fuelRecords: props.fuelRecords, onDeleteRecord: props.onDeleteRecord }),
                 activeModule === 'settings' && React.createElement(UserManagement, { adminCredentials: props.adminCredentials, onAddUser: props.addAdminUser, onDeleteUser: props.deleteAdminUser, showMessage: props.showMessage })
             )
         )
@@ -4965,6 +5268,7 @@ const App = () => {
     const [tankerData, setTankerData] = useState([]);
     const [approvalRequests, setApprovalRequests] = useState([]);
     const [personnelApprovalRequests, setPersonnelApprovalRequests] = useState([]);
+    const [bookDeletionRequests, setBookDeletionRequests] = useState([]);
     const [personnelList, setPersonnelList] = useState(INITIAL_PERSONNEL_LIST);
     const [adminCredentials, setAdminCredentials] = useState([{ id: 'user-0', name: 'OGM Admin', username: 'ogm', password: '1839' }]);
     const [airportList, setAirportList] = useState(INITIAL_AIRPORT_LIST);
@@ -5173,27 +5477,71 @@ const App = () => {
                 setIsLoading(true);
                 setCriticalError(null);
 
-                let panelDataResult = null;
-                let approvalRequestsResult = null;
-                let personnelApprovalRequestsResult = null;
+                const fetchOgmData = async () => {
+                    let ogmJson = null;
+                    try {
+                        const ogmRes = await fetch(OGM_AIRCRAFT_DATA_SCRIPT_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                            body: JSON.stringify({ action: 'onGetAdminPanelData', payload: null })
+                        });
+                        if (ogmRes.ok) {
+                            const ogmText = await ogmRes.text();
+                            if (ogmText && !ogmText.trim().startsWith('<')) {
+                                ogmJson = JSON.parse(ogmText);
+                            }
+                        }
+                    } catch (e) {
+                        console.warn("OGM POST request failed, trying GET fallback:", e);
+                    }
 
-                try {
-                    panelDataResult = await postData('onGetAdminPanelData', null);
-                } catch (err) {
-                    console.warn("Google Apps Script 'onGetAdminPanelData' ulaşılamadı veya hata döndü:", err);
-                }
+                    const hasData = (json) => {
+                        if (!json) return false;
+                        if (Array.isArray(json) && json.length > 0) return true;
+                        if (json.data && (Array.isArray(json.data) || json.data.fuelRecords || json.data["Yakıt Kayıtları verisi"] || json.data.records)) return true;
+                        if (json.fuelRecords || json["Yakıt Kayıtları verisi"] || json.records) return true;
+                        return false;
+                    };
 
-                try {
-                    approvalRequestsResult = await postData('onGetApprovalRequests', null);
-                } catch (err) {
-                    console.warn("Google Apps Script 'onGetApprovalRequests' ulaşılamadı veya hata döndü:", err);
-                }
+                    if (!hasData(ogmJson)) {
+                        try {
+                            const ogmResGet = await fetch(OGM_AIRCRAFT_DATA_SCRIPT_URL);
+                            if (ogmResGet.ok) {
+                                const ogmTextGet = await ogmResGet.text();
+                                if (ogmTextGet && !ogmTextGet.trim().startsWith('<')) {
+                                    ogmJson = JSON.parse(ogmTextGet);
+                                }
+                            }
+                        } catch (e) {
+                            console.warn("OGM GET request failed too:", e);
+                        }
+                    }
+                    return ogmJson;
+                };
 
-                try {
-                    personnelApprovalRequestsResult = await postData('onGetPersonnelApprovalRequests', null);
-                } catch (err) {
-                    console.warn("Google Apps Script 'onGetPersonnelApprovalRequests' ulaşılamadı veya hata döndü:", err);
-                }
+                const [
+                    panelDataResult,
+                    approvalRequestsResult,
+                    personnelApprovalRequestsResult,
+                    ogmJson
+                ] = await Promise.all([
+                    postData('onGetAdminPanelData', null).catch(err => {
+                        console.warn("Google Apps Script 'onGetAdminPanelData' ulaşılamadı veya hata döndü:", err);
+                        return null;
+                    }),
+                    postData('onGetApprovalRequests', null).catch(err => {
+                        console.warn("Google Apps Script 'onGetApprovalRequests' ulaşılamadı veya hata döndü:", err);
+                        return null;
+                    }),
+                    postData('onGetPersonnelApprovalRequests', null).catch(err => {
+                        console.warn("Google Apps Script 'onGetPersonnelApprovalRequests' ulaşılamadı veya hata döndü:", err);
+                        return null;
+                    }),
+                    fetchOgmData().catch(err => {
+                        console.warn("Failed fetching OGM aircraft data script url:", err);
+                        return null;
+                    })
+                ]);
 
                 if (panelDataResult && panelDataResult.data) {
                     const panelData = panelDataResult.data;
@@ -5224,118 +5572,57 @@ const App = () => {
                     setPersonnelApprovalRequests(personnelApprovalRequestsResult.data || []);
                 }
 
-                // Load OGM Aircraft Data Script URL
-                try {
-                    let ogmJson = null;
-                    console.log("Fetching OGM records from:", OGM_AIRCRAFT_DATA_SCRIPT_URL);
-
-                    // Try POST first
-                    try {
-                        const ogmRes = await fetch(OGM_AIRCRAFT_DATA_SCRIPT_URL, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                            body: JSON.stringify({ action: 'onGetAdminPanelData', payload: null })
-                        });
-                        if (ogmRes.ok) {
-                            const ogmText = await ogmRes.text();
-                            console.log("OGM POST Raw length:", ogmText.length);
-                            if (ogmText && !ogmText.trim().startsWith('<')) {
-                                ogmJson = JSON.parse(ogmText);
-                                console.log("OGM POST response parsed as JSON.");
-                            } else {
-                                console.warn("OGM POST response returned HTML/empty instead of JSON.");
-                            }
-                        } else {
-                            console.warn("OGM POST response status not ok:", ogmRes.status);
-                        }
-                    } catch (postErr) {
-                        console.warn("OGM POST request failed, trying GET fallback:", postErr);
+                if (ogmJson) {
+                    let rawOgmRecords = null;
+                    if (ogmJson.data && ogmJson.data.fuelRecords) {
+                        rawOgmRecords = ogmJson.data.fuelRecords;
+                    } else if (ogmJson.fuelRecords) {
+                        rawOgmRecords = ogmJson.fuelRecords;
+                    } else if (ogmJson.data && ogmJson.data["Yakıt Kayıtları verisi"]) {
+                        rawOgmRecords = ogmJson.data["Yakıt Kayıtları verisi"];
+                    } else if (ogmJson["Yakıt Kayıtları verisi"]) {
+                        rawOgmRecords = ogmJson["Yakıt Kayıtları verisi"];
+                    } else if (ogmJson.data && ogmJson.data["Yakıt Kayıtları"]) {
+                        rawOgmRecords = ogmJson.data["Yakıt Kayıtları"];
+                    } else if (ogmJson["Yakıt Kayıtları"]) {
+                        rawOgmRecords = ogmJson["Yakıt Kayıtları"];
+                    } else if (ogmJson.data && ogmJson.data.records) {
+                        rawOgmRecords = ogmJson.data.records;
+                    } else if (ogmJson.records) {
+                        rawOgmRecords = ogmJson.records;
+                    } else if (Array.isArray(ogmJson)) {
+                        rawOgmRecords = ogmJson;
+                    } else if (ogmJson.data && Array.isArray(ogmJson.data)) {
+                        rawOgmRecords = ogmJson.data;
                     }
 
-                    // Fallback to GET if POST didn't return a valid JSON or data structure
-                    const hasData = (json) => {
-                        if (!json) return false;
-                        if (Array.isArray(json) && json.length > 0) return true;
-                        if (json.data && (Array.isArray(json.data) || json.data.fuelRecords || json.data["Yakıt Kayıtları verisi"] || json.data.records)) return true;
-                        if (json.fuelRecords || json["Yakıt Kayıtları verisi"] || json.records) return true;
-                        return false;
-                    };
-
-                    if (!hasData(ogmJson)) {
-                        console.log("Post response blank or empty. Trying GET to OGM script URL...");
-                        try {
-                            const ogmResGet = await fetch(OGM_AIRCRAFT_DATA_SCRIPT_URL);
-                            if (ogmResGet.ok) {
-                                const ogmTextGet = await ogmResGet.text();
-                                console.log("OGM GET Raw length:", ogmTextGet.length);
-                                if (ogmTextGet && !ogmTextGet.trim().startsWith('<')) {
-                                    ogmJson = JSON.parse(ogmTextGet);
-                                    console.log("OGM GET response parsed as JSON.");
-                                } else {
-                                    console.warn("OGM GET response returned HTML/empty instead of JSON.");
-                                }
-                            } else {
-                                console.warn("OGM GET response status not ok:", ogmResGet.status);
-                            }
-                        } catch (getErr) {
-                            console.error("OGM GET request failed too:", getErr);
-                        }
-                    }
-
-                    if (ogmJson) {
-                        let rawOgmRecords = null;
-                        if (ogmJson.data && ogmJson.data.fuelRecords) {
-                            rawOgmRecords = ogmJson.data.fuelRecords;
-                        } else if (ogmJson.fuelRecords) {
-                            rawOgmRecords = ogmJson.fuelRecords;
-                        } else if (ogmJson.data && ogmJson.data["Yakıt Kayıtları verisi"]) {
-                            rawOgmRecords = ogmJson.data["Yakıt Kayıtları verisi"];
-                        } else if (ogmJson["Yakıt Kayıtları verisi"]) {
-                            rawOgmRecords = ogmJson["Yakıt Kayıtları verisi"];
-                        } else if (ogmJson.data && ogmJson.data["Yakıt Kayıtları"]) {
-                            rawOgmRecords = ogmJson.data["Yakıt Kayıtları"];
-                        } else if (ogmJson["Yakıt Kayıtları"]) {
-                            rawOgmRecords = ogmJson["Yakıt Kayıtları"];
-                        } else if (ogmJson.data && ogmJson.data.records) {
-                            rawOgmRecords = ogmJson.data.records;
-                        } else if (ogmJson.records) {
-                            rawOgmRecords = ogmJson.records;
-                        } else if (Array.isArray(ogmJson)) {
-                            rawOgmRecords = ogmJson;
-                        } else if (ogmJson.data && Array.isArray(ogmJson.data)) {
-                            rawOgmRecords = ogmJson.data;
-                        }
-
-                        if (rawOgmRecords && rawOgmRecords.length > 0) {
-                            console.log("Found raw OGM records count:", rawOgmRecords.length);
-                            
-                            // If it's a 2D array, convert it to objects using first row as headers
-                            if (Array.isArray(rawOgmRecords[0])) {
-                                console.log("OM RAW is 2D array. Converting to objects...");
-                                const headers = rawOgmRecords[0].map(h => String(h).trim());
-                                rawOgmRecords = rawOgmRecords.slice(1).map(row => {
-                                    const obj = {};
-                                    headers.forEach((h, idx) => {
-                                        obj[h] = row[idx];
-                                    });
-                                    return obj;
+                    if (rawOgmRecords && rawOgmRecords.length > 0) {
+                        console.log("Found raw OGM records count:", rawOgmRecords.length);
+                        
+                        // If it's a 2D array, convert it to objects using first row as headers
+                        if (Array.isArray(rawOgmRecords[0])) {
+                            console.log("OM RAW is 2D array. Converting to objects...");
+                            const headers = rawOgmRecords[0].map(h => String(h).trim());
+                            rawOgmRecords = rawOgmRecords.slice(1).map(row => {
+                                const obj = {};
+                                headers.forEach((h, idx) => {
+                                    obj[h] = row[idx];
                                 });
-                            }
-
-                            const parsedOgmRecords = rawOgmRecords
-                                .map(rec => normalizeOgmRecord(rec))
-                                .filter(Boolean);
-                            
-                            console.log(`Successfully mapped ${parsedOgmRecords.length} matched OGM Tanker records.`);
-                            setOgmRecords(parsedOgmRecords);
-                        } else {
-                            console.warn("No raw OGM records matched in the fetched JSON payload structure.");
+                                return obj;
+                            });
                         }
+
+                        const parsedOgmRecords = rawOgmRecords
+                            .map(rec => normalizeOgmRecord(rec))
+                            .filter(Boolean);
+                        
+                        console.log(`Successfully mapped ${parsedOgmRecords.length} matched OGM Tanker records.`);
+                        setOgmRecords(parsedOgmRecords);
                     } else {
-                        console.warn("Blank OGM script JSON response.");
+                        console.warn("No raw OGM records matched in the fetched JSON payload structure.");
                     }
-                } catch (ogmFetchError) {
-                    console.error("Failed fetching OGM aircraft data script url:", ogmFetchError);
+                } else {
+                    console.warn("Blank OGM script JSON response.");
                 }
 
             } catch (error) {
@@ -5444,6 +5731,31 @@ const App = () => {
         showMessage(`Personel talebi ${approved ? 'onaylandı' : 'reddedildi'}.`, 'success');
     };
 
+    const handleRequestBookDeletion = (bookToDelete) => {
+        const newReq = {
+            id: `bdr-${Date.now()}`,
+            bookId: bookToDelete.id,
+            book: bookToDelete,
+            requesterName: currentUser ? (currentUser.name || currentUser.username) : 'Caner',
+            timestamp: new Date().toISOString()
+        };
+        setBookDeletionRequests(prev => [...prev, newReq]);
+        showMessage("Koçan seri silme talebi admin onayına gönderildi.", "success");
+    };
+
+    const handleApproveBookDeletion = (requestId, bookId) => {
+        const updatedBooks = receiptBooks.filter(b => b.id !== bookId);
+        setReceiptBooks(updatedBooks);
+        setBookDeletionRequests(prev => prev.filter(r => r.id !== requestId));
+        updateReceiptBooks(updatedBooks);
+        showMessage("Koçan serisi silindi.", "success");
+    };
+
+    const handleRejectBookDeletion = (requestId) => {
+        setBookDeletionRequests(prev => prev.filter(r => r.id !== requestId));
+        showMessage("Koçan seri silme talebi reddedildi.", "error");
+    };
+
     const updateAircraftData = (data) => handleBulkUpdate({ aircraftData: data });
     const updateTankerData = (data) => handleBulkUpdate({ tankerData: data });
     const updatePersonnelList = (data) => handleBulkUpdate({ personnelList: data });
@@ -5523,6 +5835,10 @@ const App = () => {
                                 personnelList: personnelList,
                                 approvalRequests: approvalRequests,
                                 personnelApprovalRequests: personnelApprovalRequests,
+                                bookDeletionRequests: bookDeletionRequests,
+                                onRequestBookDeletion: handleRequestBookDeletion,
+                                onApproveBookDeletion: handleApproveBookDeletion,
+                                onRejectBookDeletion: handleRejectBookDeletion,
                                 adminCredentials: adminCredentials,
                                 airportList: airportList,
                                 receiptBooks: receiptBooks,
