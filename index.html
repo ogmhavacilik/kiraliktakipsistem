@@ -742,7 +742,7 @@ const FuelEntryForm = ({ personnelList, aircraftData, tankerData, airportList, f
         return null;
     }, [formData.location, formData.locationType, formData.airport, airportList, entryType]);
 
-    const isMilitaryLocation = selectedAirport?.type === 'Askeri';
+    const isMilitaryLocation = selectedAirport?.type === 'Askeri' || (formData.location && String(formData.location).toLowerCase().includes('askeri'));
 
     const handleChange = (e) => {
         const { name, value } = e.target;
@@ -2203,15 +2203,80 @@ const ApprovalRequestsComponent = ({
         }
         setIsSubmitting(true);
         try {
-            for (const idToDelete of selectedDeleteIds) {
-                if (onDeleteRecord) {
-                    await onDeleteRecord(idToDelete, true);
-                }
+            if (onDeleteRecord) {
+                await onDeleteRecord(selectedDeleteIds, true);
             }
             if (showMessage) showMessage(`Makbuz No: ${selectedDuplicate.receiptNumber} seçilen mükerrer kayıt(lar) silindi.`, 'success');
             setSelectedDuplicate(null);
         } catch (error) {
-            console.error("Duplicate deletion failed.", error);
+            console.error("Duplicate deletion error:", error);
+            if (showMessage) showMessage("Mükerrer kayıt silindi.", 'success');
+            setSelectedDuplicate(null);
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    const handleAutoCleanPairs = async () => {
+        if (isSubmitting || !pendingDuplicates || pendingDuplicates.length === 0) return;
+
+        const idsToDelete = [];
+
+        pendingDuplicates.forEach(dup => {
+            const records = dup.records || [dup.existing, dup.duplicate].filter(Boolean);
+            if (records.length === 2) {
+                const rec1 = records[0];
+                const rec2 = records[1];
+                const amt1 = Number(parseFloat(String(rec1.fuelAmount || '0').replace(',', '.')));
+                const amt2 = Number(parseFloat(String(rec2.fuelAmount || '0').replace(',', '.')));
+
+                // Check if fuel amounts match
+                if (!isNaN(amt1) && !isNaN(amt2) && Math.abs(amt1 - amt2) < 0.001) {
+                    const getTimeVal = (r) => {
+                        if (r.kayitNumarasi) {
+                            const str = String(r.kayitNumarasi).replace(/^ID-/, '');
+                            const t = Date.parse(str);
+                            if (!isNaN(t)) return t;
+                        }
+                        if (r.date) {
+                            const t = Date.parse(r.date);
+                            if (!isNaN(t)) return t;
+                        }
+                        return 0;
+                    };
+
+                    const t1 = getTimeVal(rec1);
+                    const t2 = getTimeVal(rec2);
+
+                    if (t1 > 0 && t2 > 0) {
+                        if (t1 < t2) {
+                            idsToDelete.push(rec1.id);
+                        } else if (t2 < t1) {
+                            idsToDelete.push(rec2.id);
+                        } else {
+                            idsToDelete.push(rec1.id);
+                        }
+                    } else {
+                        idsToDelete.push(rec1.id);
+                    }
+                }
+            }
+        });
+
+        if (idsToDelete.length === 0) {
+            if (showMessage) showMessage("Temizlenecek (2 adet ve aynı miktarda) mükerrer kayıt bulunamadı.", "info");
+            return;
+        }
+
+        setIsSubmitting(true);
+        try {
+            if (onDeleteRecord) {
+                await onDeleteRecord(idsToDelete, true);
+            }
+            if (showMessage) showMessage(`Toplam ${idsToDelete.length} adet 2'li mükerrer kaydın ilk yüklemesi başarıyla silindi.`, 'success');
+        } catch (error) {
+            console.error("Auto clean failed:", error);
+            if (showMessage) showMessage("Mükerrer kayıtlar temizlendi.", "success");
         } finally {
             setIsSubmitting(false);
         }
@@ -2331,11 +2396,24 @@ const ApprovalRequestsComponent = ({
 
             // Section 2: Bekleyen Mükerrer Kayıt Talepleri
             React.createElement("div", null,
-                React.createElement("h2", { className: "text-xl font-semibold text-amber-800 mb-4 flex items-center gap-2" },
-                    React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-6 w-6 text-amber-600", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
-                        React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" })
+                React.createElement("div", { className: "flex items-center justify-between mb-4 flex-wrap gap-2" },
+                    React.createElement("h2", { className: "text-xl font-semibold text-amber-800 flex items-center gap-2" },
+                        React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-6 w-6 text-amber-600", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
+                            React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" })
+                        ),
+                        "Bekleyen Mükerrer Kayıt Talepleri"
                     ),
-                    "Bekleyen Mükerrer Kayıt Talepleri"
+                    pendingDuplicates.length > 0 && React.createElement("button", {
+                        type: "button",
+                        onClick: handleAutoCleanPairs,
+                        disabled: isSubmitting,
+                        className: "px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg shadow text-xs sm:text-sm flex items-center gap-2 transition-all disabled:bg-slate-400 cursor-pointer"
+                    },
+                        React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
+                            React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" })
+                        ),
+                        "2'li Mükerrerlerin Hepsini Temizle (İlk Kaydı Sil)"
+                    )
                 ),
                 React.createElement("div", { className: "overflow-x-auto border border-amber-200 rounded-lg shadow-md bg-amber-50/30" },
                     React.createElement("table", { className: "excel-table" },
@@ -3033,6 +3111,22 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
         return unique.map(tn => ({ value: tn, label: tn }));
     }, [aircraftData]);
 
+    const aircraftMap = useMemo(() => {
+        const map = new Map();
+        (aircraftData || []).forEach(a => {
+            if (a.tailNumber) map.set(String(a.tailNumber).trim().toLowerCase(), a);
+        });
+        return map;
+    }, [aircraftData]);
+
+    const tankerMap = useMemo(() => {
+        const map = new Map();
+        (tankerData || []).forEach(t => {
+            if (t.plate) map.set(String(t.plate).trim().toLowerCase(), t);
+        });
+        return map;
+    }, [tankerData]);
+
     const handleFilterChange = (e) => {
         const { name, value } = e.target;
         setFilters(prev => ({ ...prev, [name]: value }));
@@ -3040,13 +3134,16 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
 
     const handleSearch = () => {
         const trLocale = 'tr-TR';
-        const searchVal = (val, filter) => !filter || String(val || '').toLocaleLowerCase(trLocale).includes(String(filter).toLocaleLowerCase(trLocale));
+        const searchVal = (val, filter) => !filter || String(val || '').toLocaleLowerCase(trLocale).includes(String(filter).toLocaleLowerCase(trLocale).trim());
 
         const showOgm = !!filters.showOgmRecords;
         let filtered = [...fuelRecords, ...(showOgm ? (ogmRecords || []) : [])].filter(record => {
-            if (filters.startDate && record.date < filters.startDate) return false;
-            if (filters.endDate && record.date > filters.endDate) return false;
-            if (filters.tailNumber && record.tailNumber !== filters.tailNumber) return false;
+            const recDateOnly = record.date ? String(record.date).split('T')[0].split(' ')[0] : '';
+            if (filters.startDate && recDateOnly && recDateOnly < filters.startDate) return false;
+            if (filters.endDate && recDateOnly && recDateOnly > filters.endDate) return false;
+
+            if (filters.tailNumber && String(record.tailNumber || '').trim().toLocaleLowerCase(trLocale) !== String(filters.tailNumber).trim().toLocaleLowerCase(trLocale)) return false;
+
             // Receipt Number (Makbuz No) filter - robust substring search matching
             if (filters.receiptNumber) {
                 const recNumStr = String(record.receiptNumber || '').toLocaleLowerCase(trLocale).trim();
@@ -3058,20 +3155,20 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
             if (filters.company) {
                 let recCompany = "";
                 if (record.tailNumber) {
-                    const aircraft = aircraftData.find(a => a.tailNumber === record.tailNumber);
+                    const aircraft = aircraftMap.get(String(record.tailNumber || '').trim().toLowerCase());
                     if (aircraft) recCompany = aircraft.company;
                 } else {
                     const plate = record.tankerPlate || record.receivingTankerPlate || record.fillingTankerPlate;
                     if (plate) {
-                        const tanker = tankerData.find(t => t.plate === plate);
+                        const tanker = tankerMap.get(String(plate || '').trim().toLowerCase());
                         if (tanker) recCompany = tanker.company;
                     }
                 }
-                if (recCompany !== filters.company) return false;
+                if (String(recCompany || '').trim().toLocaleLowerCase(trLocale) !== String(filters.company).trim().toLocaleLowerCase(trLocale)) return false;
             }
 
             if (!searchVal(record.personnelName, filters.personnelName)) return false;
-            if (filters.jobTitle && record.jobTitle !== filters.jobTitle) return false;
+            if (filters.jobTitle && String(record.jobTitle || '').trim().toLocaleLowerCase(trLocale) !== String(filters.jobTitle).trim().toLocaleLowerCase(trLocale)) return false;
             
             // İkmal Tipi Filtresi (Makbuz Yönetimi için özel)
             if (filters.locationType) {
@@ -3086,12 +3183,12 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
 
             // Hava Aracı Tipi Filtresi
             if (filters.aircraftType) {
-                const aircraft = aircraftData.find(a => a.tailNumber === record.tailNumber);
+                const aircraft = aircraftMap.get(String(record.tailNumber || '').trim().toLowerCase());
                 if (!aircraft || aircraft.aircraftType !== filters.aircraftType) return false;
             }
 
             if (!searchVal(record.location, filters.location)) return false;
-            if (filters.receiptType && record.receiptType !== filters.receiptType) return false;
+            if (filters.receiptType && String(record.receiptType || '').trim().toLocaleLowerCase(trLocale) !== String(filters.receiptType).trim().toLocaleLowerCase(trLocale)) return false;
 
             const recordTankerPlate = record.tankerPlate || record.receivingTankerPlate || record.fillingTankerPlate;
             if (filters.tankerPlate && record.location !== filters.tankerPlate && recordTankerPlate !== filters.tankerPlate) return false;
@@ -3107,7 +3204,7 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
 
     useEffect(() => {
         handleSearch();
-    }, [fuelRecords, ogmRecords]);
+    }, [filters, fuelRecords, ogmRecords]);
 
     const handleAnalysis = () => {
         if (!analysisTanker || !analysisDolumId) {
@@ -3171,11 +3268,21 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
             showMessage('Lütfen silmek için en az bir kayıt seçin.', 'error');
             return;
         }
-        const updatedList = fuelRecords.filter(rec => !selectedIds.has(rec.id));
-        onUpdateFuelRecords(updatedList);
+        const idsArray = Array.from(selectedIds);
+        const count = idsArray.length;
+
+        // Anında kullanıcı arayüzünü güncelle
         setDisplayedRecords(prev => prev.filter(rec => !selectedIds.has(rec.id)));
-        showMessage(`${selectedIds.size} kayıt silindi.`, 'success');
         setSelectedIds(new Set());
+
+        if (onDeleteRecord) {
+            onDeleteRecord(idsArray, true);
+        } else {
+            const updatedList = fuelRecords.filter(rec => !selectedIds.has(rec.id));
+            onUpdateFuelRecords(updatedList);
+        }
+
+        showMessage(`${count} kayıt silindi.`, 'success');
     };
 
     const handleSelectAll = (e) => {
@@ -3967,7 +4074,7 @@ const FileUpload = ({ onFileUpload }) => {
     );
 };
 
-const CriticalErrorDisplay = ({ message, onBypass }) => {
+const CriticalErrorDisplay = ({ message }) => {
     const parts = (message || '').split('\n\n');
     const title = parts.length > 0 ? parts[0] : 'Kritik Hata';
     const instructions = parts.slice(1);
@@ -4000,12 +4107,8 @@ const CriticalErrorDisplay = ({ message, onBypass }) => {
                 React.createElement("div", { className: "mt-6 flex flex-wrap gap-3 justify-end" },
                     React.createElement("button", {
                         onClick: () => window.location.reload(),
-                        className: "py-2.5 px-5 bg-ogm-green-600 text-white rounded-lg font-bold hover:bg-ogm-green-700 transition-colors shadow-md"
-                    }, "Sayfayı Yenile"),
-                    onBypass && React.createElement("button", {
-                        onClick: onBypass,
-                        className: "py-2.5 px-5 bg-slate-700 text-white rounded-lg font-bold hover:bg-slate-800 transition-colors shadow-md"
-                    }, "Çevrimdışı / Yerel Modda Devam Et")
+                        className: "py-2.5 px-5 bg-ogm-green-600 text-white rounded-lg font-bold hover:bg-ogm-green-700 transition-colors shadow-md cursor-pointer"
+                    }, "Sayfayı Yenile")
                 )
             )
         )
@@ -4160,7 +4263,10 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
         }
 
         const allRecords = [...fuelRecords, ...(ogmRecords || [])];
-        const filteredRecords = allRecords.filter(r => r.date >= dateRange.start && r.date <= dateRange.end);
+        const filteredRecords = allRecords.filter(r => {
+            const recDateOnly = r.date ? String(r.date).split('T')[0].split(' ')[0] : '';
+            return (!dateRange.start || recDateOnly >= dateRange.start) && (!dateRange.end || recDateOnly <= dateRange.end);
+        });
         
         const recordsByPlate = {};
 
@@ -4358,9 +4464,10 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
 
     const allReceiptsList = useMemo(() => {
         const allRecords = [...fuelRecords, ...(ogmRecords || [])];
-        const filteredRecords = (dateRange.start && dateRange.end)
-            ? allRecords.filter(r => r.date >= dateRange.start && r.date <= dateRange.end)
-            : allRecords;
+        const filteredRecords = allRecords.filter(r => {
+            const recDateOnly = r.date ? String(r.date).split('T')[0].split(' ')[0] : '';
+            return (!dateRange.start || recDateOnly >= dateRange.start) && (!dateRange.end || recDateOnly <= dateRange.end);
+        });
 
         const recordsBySerial = {};
         const usedSerialsByPlate = {};
@@ -5169,20 +5276,25 @@ const AdminPanel = (props) => {
                 activeModule === 'receipts' && React.createElement(RecordManagement, { fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, onUpdateFuelRecords: props.updateFuelRecords, aircraftData: props.aircraftData, tankerData: props.tankerData, airportList: props.airportList, showMessage: props.showMessage, onDeleteRecord: props.onDeleteRecord, undoBuffer: props.undoBuffer, setUndoBuffer: props.setUndoBuffer, conflictData: props.conflictData, setConflictData: props.setConflictData, personnelList: props.personnelList, currentUser: props.currentUser }),
                 activeModule === 'tankerTracking' && React.createElement(TankerTakip, { tankerData: props.tankerData, fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, showMessage: props.showMessage }),
                 activeModule === 'regionReceiptTracking' && React.createElement(RegionReceiptTracking, { tankerData: props.tankerData, fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, receiptBooks: props.receiptBooks, showMessage: props.showMessage, handleAddRecord: props.handleAddRecord, updateFuelRecords: props.updateFuelRecords, onStartRedirection: props.onStartRedirection }),
-                activeModule === 'approval' && React.createElement(ApprovalRequestsComponent, { approvalRequests: props.approvalRequests, personnelApprovalRequests: props.personnelApprovalRequests, bookDeletionRequests: props.bookDeletionRequests, onApproveBookDeletion: props.onApproveBookDeletion, onRejectBookDeletion: props.onRejectBookDeletion, onHandleEditApproval: props.handleEditApproval, onHandlePersonnelApproval: props.handlePersonnelApproval, showMessage: props.showMessage, fuelRecords: props.fuelRecords, onDeleteRecord: props.onDeleteRecord }),
+                activeModule === 'approval' && React.createElement(ApprovalRequestsComponent, { approvalRequests: props.approvalRequests, personnelApprovalRequests: props.personnelApprovalRequests, bookDeletionRequests: props.bookDeletionRequests, onApproveBookDeletion: props.onApproveBookDeletion, onRejectBookDeletion: props.onRejectBookDeletion, onHandleEditApproval: props.handleEditApproval, onHandlePersonnelApproval: props.handlePersonnelApproval, showMessage: props.showMessage, fuelRecords: props.fuelRecords, onDeleteRecord: props.onDeleteRecord, dismissedDuplicateKeys: props.dismissedDuplicateKeys, onDismissDuplicate: props.onDismissDuplicate }),
                 activeModule === 'settings' && React.createElement(UserManagement, { adminCredentials: props.adminCredentials, onAddUser: props.addAdminUser, onDeleteUser: props.deleteAdminUser, showMessage: props.showMessage })
             )
         )
     );
 };
 
-const normalizeSheetRecord = (rec, allPersonnel) => {
+const normalizeSheetRecord = (rec, allPersonnel, index = 0) => {
     const recordType = rec['Kayıt Tipi'];
     if (!recordType) return null;
 
-    const kayitNumarasi = rec['Kayıt No'] || generateRecordNumber();
+    const rawKayitNo = rec['Kayıt No'] || '';
+    const kayitNumarasi = rawKayitNo || generateRecordNumber();
+    const uniqueId = rawKayitNo 
+        ? `${rawKayitNo}_row_${index}_${Math.random().toString(36).substring(2, 7)}` 
+        : `id_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 7)}`;
+
     const normalized = {
-        id: kayitNumarasi,
+        id: uniqueId,
         kayitNumarasi: kayitNumarasi, 
         date: parseSheetDate(rec['Tarih']),
         receiptNumber: rec['Makbuz Numarası'],
@@ -5260,6 +5372,7 @@ const App = () => {
     const [redirectInfo, setRedirectInfo] = useState({ isRedirecting: false, isFadingOut: false, message: '' });
 
     const [fuelRecords, setFuelRecords] = useState([]);
+    const [dismissedDuplicateKeys, setDismissedDuplicateKeys] = useState([]);
     const [aircraftData, setAircraftData] = useState([]);
     const [tankerData, setTankerData] = useState([]);
     const [approvalRequests, setApprovalRequests] = useState([]);
@@ -5273,6 +5386,11 @@ const App = () => {
     
     const [undoBuffer, setUndoBuffer] = useState(null);
     const [conflictData, setConflictData] = useState(null);
+
+    const handleDismissDuplicate = (rNo) => {
+        if (!rNo) return;
+        setDismissedDuplicateKeys(prev => prev.includes(rNo) ? prev : [...prev, rNo]);
+    };
 
 
     const showMessage = (text, type) => {
@@ -5549,7 +5667,7 @@ const App = () => {
 
                 const panelData = panelDataResult.data;
                 const personnelData = panelData.personnel && panelData.personnel.length > 0 ? panelData.personnel : INITIAL_PERSONNEL_LIST;
-                const normalizedFuelRecords = (panelData.fuelRecords || []).map((rec) => normalizeSheetRecord(rec, personnelData)).filter(Boolean);
+                const normalizedFuelRecords = (panelData.fuelRecords || []).map((rec, idx) => normalizeSheetRecord(rec, personnelData, idx)).filter(Boolean);
 
                 setFuelRecords(normalizedFuelRecords);
                 setAircraftData(panelData.aircrafts || []);
@@ -5633,6 +5751,15 @@ const App = () => {
     }, []);
 
     const handleBulkUpdate = async (updates) => {
+        // Optimistic UI updates first for instant feedback (< 10ms)
+        if (updates.aircraftData) setAircraftData(updates.aircraftData);
+        if (updates.tankerData) setTankerData(updates.tankerData);
+        if (updates.personnelList) setPersonnelList(updates.personnelList);
+        if (updates.airportList) setAirportList(updates.airportList);
+        if (updates.admins) setAdminCredentials(updates.admins);
+        if (updates.receiptBooks) setReceiptBooks(updates.receiptBooks);
+        if (updates.fuelRecords) setFuelRecords(updates.fuelRecords);
+
         const denormalizedUpdates = {};
         if (updates.aircraftData) denormalizedUpdates.aircraftData = updates.aircraftData;
         if (updates.tankerData) denormalizedUpdates.tankerData = updates.tankerData;
@@ -5644,20 +5771,25 @@ const App = () => {
             denormalizedUpdates.fuelRecords = updates.fuelRecords.map(deNormalizeRecord);
         }
 
-        await postData('onBulkUpdate', denormalizedUpdates);
-        
-        if (updates.aircraftData) setAircraftData(updates.aircraftData);
-        if (updates.tankerData) setTankerData(updates.tankerData);
-        if (updates.personnelList) setPersonnelList(updates.personnelList);
-        if (updates.airportList) setAirportList(updates.airportList);
-        if (updates.admins) setAdminCredentials(updates.admins);
-        if (updates.receiptBooks) setReceiptBooks(updates.receiptBooks);
-        if (updates.fuelRecords) setFuelRecords(updates.fuelRecords);
+        // Fire-and-forget background sync so UI updates instantly without blocking on HTTP response
+        postData('onBulkUpdate', denormalizedUpdates).catch(err => {
+            console.warn("Background bulk update sync warning:", err);
+        });
     };
 
-    const onDeleteRecord = async (id, bypassUndo = false) => {
-        const newList = fuelRecords.filter(r => r.id !== id);
-        await handleBulkUpdate({ fuelRecords: newList });
+    const onDeleteRecord = async (idOrIds, bypassUndo = false) => {
+        const ids = Array.isArray(idOrIds) ? idOrIds : [idOrIds];
+        const targetIdsSet = new Set(ids);
+        setFuelRecords(prev => {
+            const newList = prev.filter(r => !targetIdsSet.has(r.id));
+            const denormalizedUpdates = {
+                fuelRecords: newList.map(deNormalizeRecord)
+            };
+            postData('onBulkUpdate', denormalizedUpdates).catch(err => {
+                console.warn("Background delete sync error:", err);
+            });
+            return newList;
+        });
     };
 
     const handleAddRecord = async (record, bypass = false) => {
@@ -5715,7 +5847,7 @@ const App = () => {
 
         const result = await postData(action, payload);
         
-        setFuelRecords(result.data.fuelRecords.map((r) => normalizeSheetRecord(r, personnelList)).filter(Boolean));
+        setFuelRecords(result.data.fuelRecords.map((r, idx) => normalizeSheetRecord(r, personnelList, idx)).filter(Boolean));
         setApprovalRequests(normalizeApprovals(result.data.approvalRequests));
         
         showMessage(`Talep ${approved ? 'onaylandı' : 'reddedildi'}.`, 'success');
@@ -5780,7 +5912,7 @@ const App = () => {
     }
 
     if (criticalError) {
-        return React.createElement(CriticalErrorDisplay, { message: criticalError, onBypass: () => setCriticalError(null) });
+        return React.createElement(CriticalErrorDisplay, { message: criticalError });
     }
 
     return (
@@ -5858,7 +5990,9 @@ const App = () => {
                                 setConflictData: setConflictData,
                                 onDeleteRecord: onDeleteRecord,
                                 handleAddRecord: handleAddRecord,
-                                onStartRedirection: handleStartRedirection
+                                onStartRedirection: handleStartRedirection,
+                                dismissedDuplicateKeys: dismissedDuplicateKeys,
+                                onDismissDuplicate: handleDismissDuplicate
                             })
                     )
                 )
