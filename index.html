@@ -152,7 +152,7 @@ import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 
 // From constants.ts
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxGOrppHEe0ZJqqmF-Tz7CSJpyp5f2BaabrvtyVPYGuLBV0YtJVvfDhBwWbgoLvnw5rGA/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzsct6wLseFx8jumRyEhbGZG4-aYgEMltKfqDZ9JfsWQAqrrvXySxky0kcmzGEQpe_kJg/exec";
 // ogm hava araçları verisi scripti
 const OGM_AIRCRAFT_DATA_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwJVvXLX84N_79x_Yik_flkQ1jjr70Krwqnj6vJ77gUnCSlUcs9oq2MkKpTy2ZIwtU/exec";
 
@@ -279,6 +279,14 @@ const INITIAL_AIRPORT_LIST = [
     { id: 'onq', name: 'Zonguldak Çaycuma Havalimanı (ONQ)', type: 'Sivil' },
 ];
 
+const parseFuelAmount = (val) => {
+    if (val === null || val === undefined || val === '') return 0;
+    if (typeof val === 'number') return isNaN(val) ? 0 : val;
+    const cleanStr = String(val).trim().replace(/\s/g, '').replace(',', '.');
+    const num = parseFloat(cleanStr);
+    return isNaN(num) ? 0 : num;
+};
+
 const generateRecordNumber = () => {
     return 'ID-' + new Date().toISOString();
 };
@@ -386,21 +394,84 @@ const exportTableToExcel = (tableId, filename) => {
     URL.revokeObjectURL(url);
 };
 
-const Modal = ({ isOpen, onClose, title, children }) => {
+const Modal = ({ isOpen, onClose, title, children, clickPosition }) => {
+    useEffect(() => {
+        if (!isOpen) return;
+        const handleKeyDown = (e) => {
+            if (e.key === 'Escape' || e.keyCode === 27) {
+                if (onClose) onClose();
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isOpen, onClose]);
+
     if (!isOpen) return null;
+
+    let cardStyle = {};
+    const hasClickPos = clickPosition && typeof clickPosition.y === 'number';
+    const vh = typeof window !== 'undefined' ? (window.innerHeight || 800) : 800;
+    const maxModalH = Math.min(vh - 32, 750);
+
+    if (hasClickPos) {
+        const clickedY = clickPosition.y;
+        // Center modal vertically around the clicked row location without ever shrinking its height
+        const estimatedModalHeight = 600;
+        let top = clickedY - (estimatedModalHeight / 2);
+        const maxTop = Math.max(16, vh - Math.min(maxModalH, estimatedModalHeight) - 16);
+        
+        if (top > maxTop) top = maxTop;
+        if (top < 16) top = 16;
+
+        cardStyle = {
+            position: 'fixed',
+            top: `${Math.round(top)}px`,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            maxHeight: `${Math.round(maxModalH)}px`,
+            width: 'calc(100% - 32px)',
+            maxWidth: '960px',
+            margin: 0
+        };
+    } else {
+        cardStyle = {
+            position: 'fixed',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            maxHeight: `${Math.round(maxModalH)}px`,
+            width: 'calc(100% - 32px)',
+            maxWidth: '960px',
+            margin: 0
+        };
+    }
+
     return (
         React.createElement("div", {
-            className: "fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-40 p-4",
+            className: "fixed inset-0 bg-black/60 backdrop-blur-[2px] z-50",
             onClick: onClose
         }, React.createElement("div", {
-            className: "bg-white/80 backdrop-blur-md rounded-xl shadow-2xl w-full max-w-5xl flex flex-col gap-4 border border-white/30",
+            style: cardStyle,
+            className: "bg-white rounded-xl shadow-2xl flex flex-col border border-slate-200 animate-in fade-in zoom-in-95 duration-150 relative",
             onClick: e => e.stopPropagation()
         }, React.createElement("div", {
-            className: "p-5 border-b border-slate-200"
+            className: "p-4 sm:p-5 border-b border-slate-200 flex justify-between items-center bg-slate-50/90 rounded-t-xl shrink-0"
         }, React.createElement("h3", {
-            className: "text-xl font-bold text-slate-700"
-        }, title)), React.createElement("div", {
-            className: "p-5 flex flex-col gap-4 overflow-auto max-h-[80vh]"
+            className: "text-lg sm:text-xl font-bold text-slate-800 flex items-center gap-2"
+        }, title),
+        React.createElement("button", {
+            type: "button",
+            onClick: onClose,
+            className: "text-slate-400 hover:text-slate-700 p-1.5 rounded-lg hover:bg-slate-200/80 transition-colors cursor-pointer text-sm font-semibold flex items-center gap-1",
+            title: "Kapat (ESC)"
+        },
+            React.createElement("span", { className: "text-xs px-1.5 py-0.5 bg-slate-200 text-slate-600 rounded font-mono hidden sm:inline" }, "ESC"),
+            React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-5 w-5", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
+                React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M6 18L18 6M6 6l12 12" })
+            )
+        )), React.createElement("div", {
+            className: "p-4 sm:p-6 flex flex-col gap-4 overflow-y-auto",
+            style: { maxHeight: `calc(${maxModalH}px - 72px)` }
         }, children)))
     );
 };
@@ -1380,6 +1451,7 @@ const SearchRecords = ({ fuelRecords, ogmRecords, personnelList, aircraftData, t
     const [displayedRecords, setDisplayedRecords] = useState([]);
     const [hasSearched, setHasSearched] = useState(false);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+    const [editModalPosition, setEditModalPosition] = useState(null);
     const [editingRecord, setEditingRecord] = useState(null);
     const [editedFields, setEditedFields] = useState({});
 
@@ -1467,9 +1539,19 @@ const SearchRecords = ({ fuelRecords, ogmRecords, personnelList, aircraftData, t
         setHasSearched(true);
     };
 
-    const handleRowDoubleClick = (record) => {
+    const handleRowDoubleClick = (record, e) => {
+        if (e) {
+            const rect = e.currentTarget ? e.currentTarget.getBoundingClientRect() : null;
+            const y = rect ? rect.top : (typeof e.clientY === 'number' ? e.clientY : null);
+            setEditModalPosition({ x: e.clientX, y: y });
+        } else {
+            setEditModalPosition(null);
+        }
         setEditingRecord(record);
-        setEditedFields({...record});
+        setEditedFields({
+            ...record,
+            fuelAmount: record.fuelAmount !== undefined && record.fuelAmount !== null ? String(record.fuelAmount) : ''
+        });
         setIsEditModalOpen(true);
     };
 
@@ -1477,15 +1559,19 @@ const SearchRecords = ({ fuelRecords, ogmRecords, personnelList, aircraftData, t
         const { name, value } = e.target;
         setEditedFields(prev => ({ 
            ...prev, 
-           [name]: name === 'fuelAmount' ? (parseFloat(String(value).replace(',', '.')) || 0) : value 
+           [name]: value 
         }));
     };
 
     const handleEditRequestSubmit = () => {
         if (!editingRecord) return;
-        const changes = Object.keys(editedFields).reduce((acc, key) => {
-            if (String(editedFields[key] ?? '') !== String(editingRecord[key] ?? '')) {
-                acc[key] = editedFields[key];
+        const cleanedFields = {
+            ...editedFields,
+            fuelAmount: parseFuelAmount(editedFields.fuelAmount)
+        };
+        const changes = Object.keys(cleanedFields).reduce((acc, key) => {
+            if (String(cleanedFields[key] ?? '') !== String(editingRecord[key] ?? '')) {
+                acc[key] = cleanedFields[key];
             }
             return acc;
         }, {});
@@ -1594,7 +1680,7 @@ const SearchRecords = ({ fuelRecords, ogmRecords, personnelList, aircraftData, t
                             displayedRecords.length > 0 ? (
                                 displayedRecords.map(record => {
                                     const rowClass = "hover:bg-slate-50 cursor-pointer";
-                                    return React.createElement("tr", { key: record.id, onDoubleClick: () => handleRowDoubleClick(record), className: rowClass },
+                                    return React.createElement("tr", { key: record.id, onDoubleClick: (e) => handleRowDoubleClick(record, e), className: rowClass },
                                         React.createElement("td", { className: "p-3" }, formatDisplayDate(record.kayitNumarasi)),
                                         React.createElement("td", { className: "p-3" }, formatDisplayDateOnly(record.date)),
                                         React.createElement("td", { className: "p-3 font-semibold" }, 
@@ -1630,7 +1716,15 @@ const SearchRecords = ({ fuelRecords, ogmRecords, personnelList, aircraftData, t
                 )
             ),
 
-            React.createElement(Modal, { isOpen: !!isEditModalOpen, onClose: () => setIsEditModalOpen(false), title: "Kayıt Düzenleme Talebi Oluştur", alignTop: true },
+            React.createElement(Modal, { 
+                isOpen: !!isEditModalOpen, 
+                onClose: () => {
+                    setIsEditModalOpen(false);
+                    setEditModalPosition(null);
+                }, 
+                clickPosition: editModalPosition,
+                title: "Kayıt Düzenleme Talebi Oluştur" 
+            },
                 editingRecord && React.createElement("div", { className: "space-y-4" },
                     React.createElement("div", { className: "grid grid-cols-1 md:grid-cols-2 gap-4" },
                         React.createElement("div", null,
@@ -1685,7 +1779,7 @@ const SearchRecords = ({ fuelRecords, ogmRecords, personnelList, aircraftData, t
                         ),
                         React.createElement("div", null,
                             React.createElement("label", { className: "font-semibold text-slate-600 mb-1 block text-xs" }, "Yakıt Miktarı (lt):"),
-                            React.createElement("input", { type: "text", name: "fuelAmount", value: String(editedFields.fuelAmount).replace('.', ','), onChange: handleEditChange, className: "w-full p-2 border border-slate-300 rounded-md text-sm font-bold" })
+                            React.createElement("input", { type: "text", name: "fuelAmount", value: editedFields.fuelAmount !== undefined && editedFields.fuelAmount !== null ? String(editedFields.fuelAmount) : '', onChange: handleEditChange, className: "w-full p-2 border border-slate-300 rounded-md text-sm font-bold" })
                         ),
                         editedFields.recordType === 'tankerTransfer' && React.createElement("div", { className: "md:col-span-2 border-l-4 border-ogm-green-500 pl-3 bg-slate-50/50 p-2 rounded" },
                             React.createElement("label", { className: "font-semibold text-slate-600 mb-1 block text-xs" }, "İlgili Dolum Kaydı Bağlantısı (Manuel):"),
@@ -2056,7 +2150,9 @@ const ApprovalRequestsComponent = ({
     showMessage
 }) => {
     const [selectedRequest, setSelectedRequest] = useState(null);
+    const [requestModalPosition, setRequestModalPosition] = useState(null);
     const [selectedPersonnelRequest, setSelectedPersonnelRequest] = useState(null);
+    const [personnelModalPosition, setPersonnelModalPosition] = useState(null);
     const [selectedDuplicate, setSelectedDuplicate] = useState(null);
     const [selectedDeleteIds, setSelectedDeleteIds] = useState([]);
     const [selectedBookDeletion, setSelectedBookDeletion] = useState(null);
@@ -2158,6 +2254,43 @@ const ApprovalRequestsComponent = ({
             setSelectedRequest(null);
         } catch (error) {
             console.error("Rejection failed, keeping modal open.", error);
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    const handleDeleteRequest = async (e, req) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        if (isSubmitting || !req) return;
+        setIsSubmitting(true);
+        try {
+            await onHandleEditApproval(req, false);
+            if (selectedRequest && selectedRequest.id === req.id) {
+                setSelectedRequest(null);
+            }
+        } catch (error) {
+            console.error("Failed to delete request:", error);
+            if (showMessage) showMessage("Talep silinirken bir hata oluştu: " + (error.message || ''), "error");
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    const handleDeletePersonnelRequest = async (e, req) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        if (isSubmitting || !req) return;
+        setIsSubmitting(true);
+        try {
+            const ids = req.allIds || [req.id];
+            for (const id of ids) {
+                await onHandlePersonnelApproval(id, false);
+            }
+            if (selectedPersonnelRequest && selectedPersonnelRequest.id === req.id) {
+                setSelectedPersonnelRequest(null);
+            }
+        } catch (error) {
+            console.error("Failed to delete personnel request:", error);
+            if (showMessage) showMessage("Personel talebi silinirken hata oluştu: " + (error.message || ''), "error");
         } finally {
             setIsSubmitting(false);
         }
@@ -2369,24 +2502,45 @@ const ApprovalRequestsComponent = ({
                             React.createElement("tr", null,
                                 editRequestHeaders.map(key => (
                                     React.createElement("th", { key: key }, FIELD_TRANSLATIONS[key] || key)
-                                ))
+                                )),
+                                React.createElement("th", { key: "actions", className: "text-center w-28" }, "Talebi Sil")
                             )
                         ),
                         React.createElement("tbody", { className: "divide-y divide-slate-200" },
                             approvalRequests.length > 0 ? (
                                 approvalRequests.map(req => {
                                     const orig = typeof req.originalRecord === 'string' ? JSON.parse(req.originalRecord) : req.originalRecord;
-                                    return React.createElement("tr", { key: req.id, onClick: () => setSelectedRequest(req), className: "hover:bg-slate-50 cursor-pointer" },
+                                    return React.createElement("tr", { 
+                                        key: req.id, 
+                                        onClick: (e) => {
+                                            setRequestModalPosition({ x: e.clientX, y: e.clientY });
+                                            setSelectedRequest(req);
+                                        }, 
+                                        className: "hover:bg-slate-50 cursor-pointer" 
+                                    },
                                         React.createElement("td", { className: "p-3" }, formatDisplayDate(orig.kayitNumarasi)),
                                         React.createElement("td", { className: "p-3" }, formatDisplayDateOnly(orig.date)),
                                         React.createElement("td", { className: "p-3" }, orig.personnelName),
                                         React.createElement("td", { className: "p-3" }, orig.location),
-                                        React.createElement("td", { className: "p-3" }, req.requesterName)
+                                        React.createElement("td", { className: "p-3 font-semibold" }, req.requesterName),
+                                        React.createElement("td", { className: "p-3 text-center", onClick: (e) => e.stopPropagation() },
+                                            React.createElement("button", {
+                                                type: "button",
+                                                onClick: (e) => handleDeleteRequest(e, req),
+                                                title: "Düzeltme Talebini Sil",
+                                                disabled: isSubmitting,
+                                                className: "p-1.5 text-red-600 hover:text-white hover:bg-red-600 rounded-lg transition-colors border border-red-200 hover:border-red-600 shadow-xs cursor-pointer inline-flex items-center justify-center"
+                                            },
+                                                React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
+                                                    React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" })
+                                                )
+                                            )
+                                        )
                                     )
                                 })
                             ) : (
                                 React.createElement("tr", null,
-                                    React.createElement("td", { colSpan: editRequestHeaders.length, className: "text-center p-6 text-slate-500" }, "Bekleyen düzeltme talebi bulunmamaktadır.")
+                                    React.createElement("td", { colSpan: editRequestHeaders.length + 1, className: "text-center p-6 text-slate-500" }, "Bekleyen düzeltme talebi bulunmamaktadır.")
                                 )
                             )
                         )
@@ -2511,7 +2665,8 @@ const ApprovalRequestsComponent = ({
                             React.createElement("tr", null,
                                 ['Ad Soyad', 'Meslek', 'Talep Tarihi', 'Bildirilen İkmal Sayısı'].map(header => (
                                     React.createElement("th", { key: header }, header)
-                                ))
+                                )),
+                                React.createElement("th", { key: "actions", className: "text-center w-28" }, "Talebi Sil")
                             )
                         ),
                         React.createElement("tbody", { className: "divide-y divide-slate-200" },
@@ -2520,15 +2675,28 @@ const ApprovalRequestsComponent = ({
                                     const nameLower = String(req.name || '').trim().toLocaleLowerCase('tr-TR');
                                     const fuelEntriesCount = fuelRecords ? fuelRecords.filter(r => String(r.personnelName || '').trim().toLocaleLowerCase('tr-TR') === nameLower).length : 0;
                                     return React.createElement("tr", { key: req.id, onClick: () => setSelectedPersonnelRequest(req), className: "hover:bg-slate-50 cursor-pointer" },
-                                        React.createElement("td", { className: "p-3" }, req.name),
+                                        React.createElement("td", { className: "p-3 font-semibold" }, req.name),
                                         React.createElement("td", { className: "p-3" }, req.job),
                                         React.createElement("td", { className: "p-3" }, new Date(req.timestamp).toLocaleString('tr-TR')),
-                                        React.createElement("td", { className: "p-3 font-semibold text-blue-600" }, `${fuelEntriesCount} adet`)
+                                        React.createElement("td", { className: "p-3 font-semibold text-blue-600" }, `${fuelEntriesCount} adet`),
+                                        React.createElement("td", { className: "p-3 text-center", onClick: (e) => e.stopPropagation() },
+                                            React.createElement("button", {
+                                                type: "button",
+                                                onClick: (e) => handleDeletePersonnelRequest(e, req),
+                                                title: "Personel Talebini Sil",
+                                                disabled: isSubmitting,
+                                                className: "p-1.5 text-red-600 hover:text-white hover:bg-red-600 rounded-lg transition-colors border border-red-200 hover:border-red-600 shadow-xs cursor-pointer inline-flex items-center justify-center"
+                                            },
+                                                React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
+                                                    React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" })
+                                                )
+                                            )
+                                        )
                                     );
                                 })
                             ) : (
                                 React.createElement("tr", null,
-                                    React.createElement("td", { colSpan: 4, className: "text-center p-6 text-slate-500" }, "Bekleyen personel kayıt talebi bulunmamaktadır.")
+                                    React.createElement("td", { colSpan: 5, className: "text-center p-6 text-slate-500" }, "Bekleyen personel kayıt talebi bulunmamaktadır.")
                                 )
                             )
                         )
@@ -2539,7 +2707,11 @@ const ApprovalRequestsComponent = ({
             // Modal 1: Edit Request
             React.createElement(Modal, {
                 isOpen: !!selectedRequest,
-                onClose: () => setSelectedRequest(null),
+                onClose: () => {
+                    setSelectedRequest(null);
+                    setRequestModalPosition(null);
+                },
+                clickPosition: requestModalPosition,
                 title: `Talep Detayları`
             },
                 selectedRequest && (
@@ -3045,8 +3217,9 @@ const UserManagement = ({ adminCredentials, onAddUser, onDeleteUser, showMessage
     );
 };
 
-const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircraftData, tankerData, airportList, showMessage, onDeleteRecord, undoBuffer, setUndoBuffer, conflictData, setConflictData, personnelList, currentUser }) => {
+const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, onUpdateSingleRecord, aircraftData, tankerData, airportList, showMessage, onDeleteRecord, undoBuffer, setUndoBuffer, conflictData, setConflictData, personnelList, currentUser }) => {
     const initialDates = getCurrentMonthDates();
+    const originalAdminRecordRef = useRef(null);
     const [filters, setFilters] = useState({
         startDate: initialDates.startDate,
         endDate: initialDates.endDate,
@@ -3078,7 +3251,9 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
     const [analysisData, setAnalysisData] = useState(null);
     
     const [isAdminEditModalOpen, setIsAdminEditModalOpen] = useState(false);
+    const [adminEditModalPosition, setAdminEditModalPosition] = useState(null);
     const [adminEditingRecord, setAdminEditingRecord] = useState(null);
+    const [isAdminSaving, setIsAdminSaving] = useState(false);
 
     const isBlinking = conflictData !== null;
 
@@ -3241,8 +3416,19 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
         }
     };
 
-    const handleRowDoubleClick = (record) => {
-        setAdminEditingRecord({ ...record });
+    const handleRowDoubleClick = (record, e) => {
+        if (e) {
+            const rect = e.currentTarget ? e.currentTarget.getBoundingClientRect() : null;
+            const y = rect ? rect.top : (typeof e.clientY === 'number' ? e.clientY : null);
+            setAdminEditModalPosition({ x: e.clientX, y: y });
+        } else {
+            setAdminEditModalPosition(null);
+        }
+        originalAdminRecordRef.current = { ...record };
+        setAdminEditingRecord({
+            ...record,
+            fuelAmount: record.fuelAmount !== undefined && record.fuelAmount !== null ? String(record.fuelAmount) : ''
+        });
         setIsAdminEditModalOpen(true);
     };
 
@@ -3250,17 +3436,37 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
         const { name, value } = e.target;
         setAdminEditingRecord(prev => ({
             ...prev,
-            [name]: name === 'fuelAmount' ? (parseFloat(String(value).replace(',', '.')) || 0) : value
+            [name]: value
         }));
     };
 
-    const handleAdminSave = () => {
-        if (!adminEditingRecord) return;
-        const updatedList = fuelRecords.map(r => r.id === adminEditingRecord.id ? adminEditingRecord : r);
-        onUpdateFuelRecords(updatedList);
-        setDisplayedRecords(prev => prev.map(r => r.id === adminEditingRecord.id ? adminEditingRecord : r));
-        showMessage('Kayıt güncellendi.', 'success');
-        setIsAdminEditModalOpen(false);
+    const handleAdminSave = async () => {
+        if (!adminEditingRecord || isAdminSaving) return;
+        setIsAdminSaving(true);
+        try {
+            const cleanedRecord = {
+                ...adminEditingRecord,
+                fuelAmount: parseFuelAmount(adminEditingRecord.fuelAmount)
+            };
+            const orig = originalAdminRecordRef.current || fuelRecords.find(r => r.id === adminEditingRecord.id) || adminEditingRecord;
+
+            setDisplayedRecords(prev => prev.map(r => r.id === adminEditingRecord.id ? cleanedRecord : r));
+            
+            if (onUpdateSingleRecord) {
+                await onUpdateSingleRecord(orig, cleanedRecord);
+            } else if (onUpdateFuelRecords) {
+                const updatedList = fuelRecords.map(r => r.id === adminEditingRecord.id ? cleanedRecord : r);
+                await onUpdateFuelRecords(updatedList);
+            }
+
+            showMessage('Kayıt e-tabloda ilgili satır bulunarak başarıyla güncellendi.', 'success');
+            setIsAdminEditModalOpen(false);
+        } catch (err) {
+            console.error("handleAdminSave error:", err);
+            showMessage('Kayıt güncellenirken hata oluştu: ' + (err.message || 'Bilinmeyen hata'), 'error');
+        } finally {
+            setIsAdminSaving(false);
+        }
     };
 
     const handleDeleteSelected = () => {
@@ -3441,7 +3647,7 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
                                 const rowClass = isOgm 
                                     ? "bg-orange-50 hover:bg-orange-100/80 cursor-pointer text-orange-950 border-orange-200"
                                     : "hover:bg-slate-50 cursor-pointer";
-                                return React.createElement("tr", { key: record.id, onDoubleClick: (isOgm || isReadOnly) ? undefined : () => handleRowDoubleClick(record), className: rowClass },
+                                return React.createElement("tr", { key: record.id, onDoubleClick: (isOgm || isReadOnly) ? undefined : (e) => handleRowDoubleClick(record, e), className: rowClass },
                                     React.createElement("td", { "data-exclude": "true" }, 
                                         isOgm 
                                         ? React.createElement("span", { className: "text-orange-600 font-bold text-xs px-1" }, "OGM")
@@ -3489,7 +3695,15 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
                     )
                 )
             ),
-            React.createElement(Modal, { isOpen: isAdminEditModalOpen, onClose: () => setIsAdminEditModalOpen(false), title: "Kayıt Düzenle (Admin)", alignTop: true },
+            React.createElement(Modal, { 
+                isOpen: isAdminEditModalOpen, 
+                onClose: () => {
+                    setIsAdminEditModalOpen(false);
+                    setAdminEditModalPosition(null);
+                }, 
+                clickPosition: adminEditModalPosition,
+                title: "Kayıt Düzenle (Admin)" 
+            },
                 adminEditingRecord && React.createElement("div", { className: "space-y-4" },
                     React.createElement("div", { className: "grid grid-cols-1 md:grid-cols-2 gap-4" },
                         React.createElement("div", null,
@@ -3566,7 +3780,7 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
                         ),
                         React.createElement("div", null,
                             React.createElement("label", { className: "block text-xs font-bold text-slate-500" }, "Yakıt (lt)"),
-                            React.createElement("input", { type: "text", name: "fuelAmount", value: String(adminEditingRecord.fuelAmount).replace('.', ','), onChange: handleAdminEditChange, className: "w-full p-2 border rounded" })
+                            React.createElement("input", { type: "text", name: "fuelAmount", value: adminEditingRecord.fuelAmount !== undefined && adminEditingRecord.fuelAmount !== null ? String(adminEditingRecord.fuelAmount) : '', onChange: handleAdminEditChange, className: "w-full p-2 border rounded" })
                         ),
                         adminEditingRecord.recordType === 'tankerTransfer' && React.createElement(React.Fragment, null,
                             React.createElement("div", null,
@@ -3630,8 +3844,8 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, aircra
                         )
                     ),
                     React.createElement("div", { className: "flex justify-end gap-3 pt-4 border-t" },
-                        React.createElement("button", { onClick: () => setIsAdminEditModalOpen(false), className: "py-2 px-5 bg-slate-200 text-slate-700 rounded-lg font-semibold" }, "İptal"),
-                        React.createElement("button", { onClick: handleAdminSave, className: "py-2 px-5 bg-ogm-green-600 text-white rounded-lg font-semibold hover:bg-ogm-green-700 shadow-md" }, "Kaydet")
+                        React.createElement("button", { onClick: () => setIsAdminEditModalOpen(false), disabled: isAdminSaving, className: "py-2 px-5 bg-slate-200 text-slate-700 rounded-lg font-semibold hover:bg-slate-300 disabled:opacity-50" }, "İptal"),
+                        React.createElement("button", { onClick: handleAdminSave, disabled: isAdminSaving, className: `py-2 px-5 bg-ogm-green-600 text-white rounded-lg font-semibold hover:bg-ogm-green-700 shadow-md ${isAdminSaving ? 'opacity-50 cursor-not-allowed' : ''}` }, isAdminSaving ? "Kaydediliyor..." : "Kaydet")
                     )
                 )
             ),
@@ -4430,13 +4644,20 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
             for (let i = book.startSerial; i <= book.endSerial; i++) {
                 const record = usedRecords[i];
                 if (record) {
+                    const recTypeLower = String(record.receiptType || '').toLowerCase();
+                    const noteLower = String(record.note || '').toLowerCase();
+                    const isDamaged = recTypeLower.includes('hasar') || recTypeLower.includes('iptal') || 
+                                      noteLower.includes('hasar') || noteLower.includes('iptal') || 
+                                      recTypeLower.includes('kayıp') || recTypeLower.includes('kayip') ||
+                                      noteLower.includes('kayıp') || noteLower.includes('kayip');
+
                     serials.push({
                         serial: i,
-                        status: 'Kullanıldı',
+                        status: isDamaged ? 'Hasarlı / İptal' : 'Kullanıldı',
                         receiptDate: record.date ? formatDisplayDateOnly(record.date) : '-',
                         recordDate: record.kayitNumarasi ? formatDisplayDate(record.kayitNumarasi) : '-',
-                        note: record.crossTankerNote || "-",
-                        statusColor: 'text-green-600'
+                        note: record.crossTankerNote || (isDamaged ? (record.receiptType || record.note || '-') : "-"),
+                        statusColor: isDamaged ? 'text-amber-700 font-bold' : 'text-green-600'
                     });
                 } else if (missingSerials.includes(i)) {
                     serials.push({
@@ -4554,14 +4775,28 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                 for (let i = book.startSerial; i <= book.endSerial; i++) {
                     const record = recordsBySerial[i];
                     if (record) {
+                        const recTypeLower = String(record.receiptType || '').toLowerCase();
+                        const noteLower = String(record.note || '').toLowerCase();
+                        const isDamaged = recTypeLower.includes('hasar') || recTypeLower.includes('iptal') || 
+                                          noteLower.includes('hasar') || noteLower.includes('iptal') || 
+                                          recTypeLower.includes('kayıp') || recTypeLower.includes('kayip') ||
+                                          noteLower.includes('kayıp') || noteLower.includes('kayip');
+
+                        let status = isDamaged ? 'Hasarlı / İptal' : 'Kullanıldı';
+                        let statusClass = isDamaged 
+                            ? 'text-amber-800 font-bold bg-amber-100 px-2 py-0.5 rounded text-xs'
+                            : 'text-green-700 font-bold bg-green-100 px-2 py-0.5 rounded text-xs';
+
+                        let transactionType = isDamaged ? 'Hasarlı / İptal Makbuz' : record.transactionType;
+
                         list.push({
                             serial: i,
                             plate: tanker.plate,
                             region: tanker.region || 'Bölge Belirtilmemiş',
                             bookRange: `${book.startSerial}-${book.endSerial}`,
-                            status: 'Kullanıldı',
-                            statusClass: 'text-green-700 font-bold bg-green-100 px-2 py-0.5 rounded text-xs',
-                            transactionType: record.transactionType,
+                            status,
+                            statusClass,
+                            transactionType,
                             fuelAmount: Number(record.fuelAmount) || 0,
                             receiptDate: record.date ? formatDisplayDateOnly(record.date) : '-',
                             recordDate: record.kayitNumarasi ? formatDisplayDate(record.kayitNumarasi) : '-',
@@ -4611,6 +4846,7 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
 
     const totalCount = allReceiptsList.length;
     const usedCount = useMemo(() => allReceiptsList.filter(r => r.status === 'Kullanıldı').length, [allReceiptsList]);
+    const damagedCount = useMemo(() => allReceiptsList.filter(r => r.status.includes('Hasarlı') || r.status.includes('İptal')).length, [allReceiptsList]);
     const missingCount = useMemo(() => allReceiptsList.filter(r => r.status.includes('yazılmamış')).length, [allReceiptsList]);
     const unusedCount = useMemo(() => allReceiptsList.filter(r => r.status.includes('Kullanılmamış')).length, [allReceiptsList]);
 
@@ -4618,6 +4854,8 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
         let list = allReceiptsList;
         if (statusFilter === 'used') {
             list = list.filter(item => item.status === 'Kullanıldı');
+        } else if (statusFilter === 'damaged') {
+            list = list.filter(item => item.status.includes('Hasarlı') || item.status.includes('İptal'));
         } else if (statusFilter === 'missing') {
             list = list.filter(item => item.status.includes('yazılmamış') || item.status.includes('Eksik'));
         } else if (statusFilter === 'unused') {
@@ -4848,6 +5086,16 @@ const RegionReceiptTracking = ({ tankerData, fuelRecords, ogmRecords = [], recei
                                         : 'bg-green-100 text-green-900 hover:bg-green-200 hover:scale-102'
                                 }`
                             }, `Kullanılan: ${usedCount}`),
+                            React.createElement("button", {
+                                type: "button",
+                                onClick: () => setStatusFilter('damaged'),
+                                title: "Sadece hasarlı veya iptal edilen makbuzları filtrele",
+                                className: `px-3 py-1.5 rounded-full font-extrabold transition-all duration-200 cursor-pointer flex items-center gap-1.5 shadow-sm text-xs ${
+                                    statusFilter === 'damaged'
+                                        ? 'bg-amber-600 text-white ring-2 ring-amber-600 ring-offset-1 scale-105 shadow-md'
+                                        : 'bg-amber-100 text-amber-900 hover:bg-amber-200 hover:scale-102'
+                                }`
+                            }, `Hasarlı / İptal: ${damagedCount}`),
                             React.createElement("button", {
                                 type: "button",
                                 onClick: () => setStatusFilter('missing'),
@@ -5273,7 +5521,7 @@ const AdminPanel = (props) => {
             ),
             React.createElement("main", { className: "flex-1" },
                 activeModule === 'dataEntry' && React.createElement(DataEntryModule, null),
-                activeModule === 'receipts' && React.createElement(RecordManagement, { fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, onUpdateFuelRecords: props.updateFuelRecords, aircraftData: props.aircraftData, tankerData: props.tankerData, airportList: props.airportList, showMessage: props.showMessage, onDeleteRecord: props.onDeleteRecord, undoBuffer: props.undoBuffer, setUndoBuffer: props.setUndoBuffer, conflictData: props.conflictData, setConflictData: props.setConflictData, personnelList: props.personnelList, currentUser: props.currentUser }),
+                activeModule === 'receipts' && React.createElement(RecordManagement, { fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, onUpdateFuelRecords: props.updateFuelRecords, onUpdateSingleRecord: props.onUpdateSingleRecord, aircraftData: props.aircraftData, tankerData: props.tankerData, airportList: props.airportList, showMessage: props.showMessage, onDeleteRecord: props.onDeleteRecord, undoBuffer: props.undoBuffer, setUndoBuffer: props.setUndoBuffer, conflictData: props.conflictData, setConflictData: props.setConflictData, personnelList: props.personnelList, currentUser: props.currentUser }),
                 activeModule === 'tankerTracking' && React.createElement(TankerTakip, { tankerData: props.tankerData, fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, showMessage: props.showMessage }),
                 activeModule === 'regionReceiptTracking' && React.createElement(RegionReceiptTracking, { tankerData: props.tankerData, fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, receiptBooks: props.receiptBooks, showMessage: props.showMessage, handleAddRecord: props.handleAddRecord, updateFuelRecords: props.updateFuelRecords, onStartRedirection: props.onStartRedirection }),
                 activeModule === 'approval' && React.createElement(ApprovalRequestsComponent, { approvalRequests: props.approvalRequests, personnelApprovalRequests: props.personnelApprovalRequests, bookDeletionRequests: props.bookDeletionRequests, onApproveBookDeletion: props.onApproveBookDeletion, onRejectBookDeletion: props.onRejectBookDeletion, onHandleEditApproval: props.handleEditApproval, onHandlePersonnelApproval: props.handlePersonnelApproval, showMessage: props.showMessage, fuelRecords: props.fuelRecords, onDeleteRecord: props.onDeleteRecord, dismissedDuplicateKeys: props.dismissedDuplicateKeys, onDismissDuplicate: props.onDismissDuplicate }),
@@ -5338,13 +5586,25 @@ const normalizeSheetRecord = (rec, allPersonnel, index = 0) => {
     return normalized;
 };
 
+const tryParseJSON = (data) => {
+    if (!data) return null;
+    if (typeof data === 'object') return data;
+    try {
+        const o = JSON.parse(data);
+        if (o && typeof o === "object") return o;
+    } catch (e) {}
+    return null;
+};
+
 const deNormalizeRecord = (record) => {
+    if (!record) return {};
+    const fuelAmt = parseFuelAmount(record.fuelAmount);
     const denormalized = {
         'Tarih': record.date || '',
         'Kayıt Tipi': RECORD_TYPE_TRANSLATIONS[record.recordType] || record.recordType || '',
         'Makbuz Numarası': record.receiptNumber || '',
         'Makbuz Tipi': record.receiptType || '-',
-        'Yakıt Miktarı (lt)': Number(record.fuelAmount) || 0,
+        'Yakıt Miktarı (lt)': fuelAmt,
         'Kuyruk Numarası': record.tailNumber || '',
         'Personel Adı': record.personnelName || '',
         'Mesleği': record.jobTitle || '',
@@ -5780,40 +6040,71 @@ const App = () => {
     const onDeleteRecord = async (idOrIds, bypassUndo = false) => {
         const ids = Array.isArray(idOrIds) ? idOrIds : [idOrIds];
         const targetIdsSet = new Set(ids);
-        setFuelRecords(prev => {
-            const newList = prev.filter(r => !targetIdsSet.has(r.id));
-            const denormalizedUpdates = {
-                fuelRecords: newList.map(deNormalizeRecord)
-            };
-            postData('onBulkUpdate', denormalizedUpdates).catch(err => {
-                console.warn("Background delete sync error:", err);
-            });
-            return newList;
-        });
-    };
+        
+        const recordsToDelete = fuelRecords.filter(r => targetIdsSet.has(r.id));
+        setFuelRecords(prev => prev.filter(r => !targetIdsSet.has(r.id)));
 
-    const handleAddRecord = async (record, bypass = false) => {
-        if (!bypass) {
-            const rNo = String(record.receiptNumber).trim();
-            const amt = Number(parseFloat(String(record.fuelAmount).replace(',', '.')));
-            const duplicate = fuelRecords.find(r => String(r.receiptNumber).trim() === rNo);
-            
-            if (duplicate) {
-                const existingAmt = Number(parseFloat(String(duplicate.fuelAmount).replace(',', '.')));
-                if (existingAmt === amt) {
-                    await onDeleteRecord(duplicate.id, true);
-                    setUndoBuffer(duplicate);
-                } else {
-                    setConflictData({ existing: duplicate, incoming: record });
-                    return;
+        // Send targeted row deletion for each deleted record
+        for (const rec of recordsToDelete) {
+            const deletePayload = {
+                requestId: `del-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+                id: rec.id,
+                kayitNumarasi: rec.kayitNumarasi,
+                receiptNumber: rec.receiptNumber,
+                record: deNormalizeRecord(rec),
+                originalRecord: deNormalizeRecord(rec)
+            };
+            try {
+                await postData('onDeleteFuelRecord', deletePayload);
+            } catch (e1) {
+                try {
+                    await postData('onDeleteRecord', deletePayload);
+                } catch (e2) {
+                    console.warn("Targeted row delete sync error:", e2);
                 }
             }
         }
+    };
+
+    const handleAddRecord = async (record, bypass = false) => {
         const denormalizedRecord = deNormalizeRecord(record);
         await postData('onAddRecord', denormalizedRecord);
         setFuelRecords(prev => [...prev, record]);
     };
     
+    const handleUpdateSingleFuelRecord = async (originalRecord, updatedRecord) => {
+        const denormalizedOrig = deNormalizeRecord(originalRecord);
+        const denormalizedUpdated = deNormalizeRecord(updatedRecord);
+
+        setFuelRecords(prev => prev.map(r => 
+            (r.id === originalRecord.id || (r.kayitNumarasi && originalRecord.kayitNumarasi && r.kayitNumarasi === originalRecord.kayitNumarasi)) 
+                ? { ...r, ...updatedRecord } 
+                : r
+        ));
+
+        const payload = {
+            requestId: `admin-edit-${Date.now()}`,
+            originalRecord: denormalizedOrig,
+            updatedRecord: denormalizedUpdated,
+            record: denormalizedUpdated
+        };
+
+        try {
+            const result = await postData('onUpdateSingleRecord', payload);
+            if (result && result.data && Array.isArray(result.data.fuelRecords)) {
+                setFuelRecords(result.data.fuelRecords.map((r, idx) => normalizeSheetRecord(r, personnelList, idx)).filter(Boolean));
+            }
+            return result;
+        } catch (err) {
+            console.warn("Direct update via onUpdateSingleRecord failed, attempting onApproveRequest fallback:", err);
+            const fallbackResult = await postData('onApproveRequest', payload);
+            if (fallbackResult && fallbackResult.data && Array.isArray(fallbackResult.data.fuelRecords)) {
+                setFuelRecords(fallbackResult.data.fuelRecords.map((r, idx) => normalizeSheetRecord(r, personnelList, idx)).filter(Boolean));
+            }
+            return fallbackResult;
+        }
+    };
+
     const handleAddPersonnelRequest = async (request) => {
         const requestWithTimestamp = {
             id: `personnel-req-${Date.now()}`,
@@ -5837,27 +6128,71 @@ const App = () => {
     };
     
     const handleEditApproval = async (request, approved) => {
-        const updatedRecord = { ...request.originalRecord, ...request.requestedChanges };
+        if (!request) return;
+        const origObj = typeof request.originalRecord === 'string' 
+            ? (tryParseJSON(request.originalRecord) || {}) 
+            : (request.originalRecord || {});
+        const changesObj = typeof request.requestedChanges === 'string' 
+            ? (tryParseJSON(request.requestedChanges) || {}) 
+            : (request.requestedChanges || {});
+        const updatedRecord = { ...origObj, ...changesObj };
+
+        // Optimistic UI update: instantly remove the request from state
+        setApprovalRequests(prev => prev.filter(r => String(r.id) !== String(request.id)));
+
+        if (approved && origObj) {
+            setFuelRecords(prev => prev.map(r => 
+                (r.id === origObj.id || (r.kayitNumarasi && origObj.kayitNumarasi && r.kayitNumarasi === origObj.kayitNumarasi)) 
+                    ? { ...r, ...updatedRecord } 
+                    : r
+            ));
+        }
+
         const payload = {
             requestId: request.id,
-            originalRecord: deNormalizeRecord(request.originalRecord),
+            originalRecord: deNormalizeRecord(origObj),
             updatedRecord: deNormalizeRecord(updatedRecord)
         };
         const action = approved ? 'onApproveRequest' : 'onRejectRequest';
 
-        const result = await postData(action, payload);
-        
-        setFuelRecords(result.data.fuelRecords.map((r, idx) => normalizeSheetRecord(r, personnelList, idx)).filter(Boolean));
-        setApprovalRequests(normalizeApprovals(result.data.approvalRequests));
+        try {
+            const result = await postData(action, payload);
+            if (result && result.data) {
+                if (Array.isArray(result.data.fuelRecords)) {
+                    setFuelRecords(result.data.fuelRecords.map((r, idx) => normalizeSheetRecord(r, personnelList, idx)).filter(Boolean));
+                }
+                if (Array.isArray(result.data.approvalRequests)) {
+                    setApprovalRequests(normalizeApprovals(result.data.approvalRequests));
+                }
+            }
+        } catch (err) {
+            console.warn(`${action} server sync warning:`, err);
+        }
         
         showMessage(`Talep ${approved ? 'onaylandı' : 'reddedildi'}.`, 'success');
     };
+
     const handlePersonnelApproval = async (requestId, approved) => {
         const payload = { requestId };
         const action = approved ? 'onApprovePersonnelRequest' : 'onRejectPersonnelRequest';
-        const result = await postData(action, payload);
-        setPersonnelList(result.data.personnelList);
-        setPersonnelApprovalRequests(result.data.personnelApprovalRequests);
+
+        // Optimistic UI update: instantly remove the request from state
+        setPersonnelApprovalRequests(prev => prev.filter(r => String(r.id) !== String(requestId)));
+
+        try {
+            const result = await postData(action, payload);
+            if (result && result.data) {
+                if (Array.isArray(result.data.personnelList)) {
+                    setPersonnelList(result.data.personnelList);
+                }
+                if (Array.isArray(result.data.personnelApprovalRequests)) {
+                    setPersonnelApprovalRequests(result.data.personnelApprovalRequests);
+                }
+            }
+        } catch (err) {
+            console.warn(`${action} sync warning:`, err);
+        }
+
         showMessage(`Personel talebi ${approved ? 'onaylandı' : 'reddedildi'}.`, 'success');
     };
 
@@ -5873,17 +6208,27 @@ const App = () => {
         showMessage("Koçan seri silme talebi admin onayına gönderildi.", "success");
     };
 
-    const handleApproveBookDeletion = (requestId, bookId) => {
+    const handleApproveBookDeletion = async (requestId, bookId) => {
         const updatedBooks = receiptBooks.filter(b => b.id !== bookId);
         setReceiptBooks(updatedBooks);
         setBookDeletionRequests(prev => prev.filter(r => r.id !== requestId));
+        try {
+            await postData('onApproveReceiptBookRequest', { requestId, bookId });
+        } catch (e) {
+            console.warn("Approve book deletion backend sync warning:", e);
+        }
         updateReceiptBooks(updatedBooks);
         showMessage("Koçan serisi silindi.", "success");
     };
 
-    const handleRejectBookDeletion = (requestId) => {
+    const handleRejectBookDeletion = async (requestId) => {
         setBookDeletionRequests(prev => prev.filter(r => r.id !== requestId));
-        showMessage("Koçan seri silme talebi reddedildi.", "error");
+        try {
+            await postData('onRejectReceiptBookRequest', { requestId });
+        } catch (e) {
+            console.warn("Reject book deletion backend sync warning:", e);
+        }
+        showMessage("Koçan seri silme talebi reddedildi / silindi.", "success");
     };
 
     const updateAircraftData = (data) => handleBulkUpdate({ aircraftData: data });
@@ -5981,6 +6326,7 @@ const App = () => {
                                 addAdminUser: addAdminUser,
                                 deleteAdminUser: deleteAdminUser,
                                 updateFuelRecords: updateFuelRecords,
+                                onUpdateSingleRecord: handleUpdateSingleFuelRecord,
                                 handleEditApproval: handleEditApproval,
                                 handlePersonnelApproval: handlePersonnelApproval,
                                 onBulkUpdate: handleBulkUpdate,
