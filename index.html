@@ -2160,12 +2160,11 @@ const ApprovalRequestsComponent = ({
 
     useEffect(() => {
         if (selectedDuplicate) {
-            const rec2 = selectedDuplicate.duplicate || (selectedDuplicate.records && selectedDuplicate.records[1]);
-            if (rec2) {
-                setSelectedDeleteIds([rec2.id]);
-            } else if (selectedDuplicate.existing) {
-                setSelectedDeleteIds([selectedDuplicate.existing.id]);
-            } else {
+            const records = selectedDuplicate.records || [selectedDuplicate.existing, selectedDuplicate.duplicate].filter(Boolean);
+            if (records.length > 1) {
+                // By default, select the 2nd (duplicate) record for deletion, preserving the 1st (original) record
+                setSelectedDeleteIds([records[1].id]);
+            } else if (records.length === 1) {
                 setSelectedDeleteIds([]);
             }
         } else {
@@ -2174,10 +2173,25 @@ const ApprovalRequestsComponent = ({
     }, [selectedDuplicate]);
 
     const toggleDeleteRecord = (id) => {
-        if (!id) return;
-        setSelectedDeleteIds(prev => 
-            prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-        );
+        if (!id || !selectedDuplicate) return;
+        const allRecords = selectedDuplicate.records || [selectedDuplicate.existing, selectedDuplicate.duplicate].filter(Boolean);
+
+        setSelectedDeleteIds(prev => {
+            if (prev.includes(id)) {
+                return prev.filter(x => x !== id);
+            } else {
+                // NEVER allow selecting all duplicate records for deletion - at least 1 MUST be preserved!
+                if (prev.length + 1 >= allRecords.length) {
+                    if (allRecords.length === 2) {
+                        // Switch selection to this one (so exactly 1 is chosen for deletion, protecting the other)
+                        return [id];
+                    }
+                    if (showMessage) showMessage("Mükerrer kayıtlardan en az bir kayıt sistemde korunmalıdır!", "warning");
+                    return prev;
+                }
+                return [...prev, id];
+            }
+        });
     };
 
     // Group duplicate records by receipt number
@@ -2193,12 +2207,18 @@ const ApprovalRequestsComponent = ({
         });
         return Object.entries(groups)
             .filter(([rNo, list]) => list.length > 1)
-            .map(([rNo, list]) => ({
-                receiptNumber: rNo,
-                records: list,
-                existing: list[0],
-                duplicate: list[1]
-            }));
+            .map(([rNo, list]) => {
+                const mappedList = list.map((item, idx) => ({
+                    ...item,
+                    occurrenceIndex: idx + 1
+                }));
+                return {
+                    receiptNumber: rNo,
+                    records: mappedList,
+                    existing: mappedList[0],
+                    duplicate: mappedList[1]
+                };
+            });
     }, [fuelRecords, dismissedDuplicateKeys]);
 
     // Group personnel approval requests by name
@@ -2328,25 +2348,33 @@ const ApprovalRequestsComponent = ({
         }
     };
 
-    const handleApproveDuplicate = async () => {
+    const handleApproveDuplicate = (e) => {
+        if (e && e.preventDefault) e.preventDefault();
         if (!selectedDuplicate || isSubmitting) return;
         if (selectedDeleteIds.length === 0) {
             if (showMessage) showMessage("Lütfen silinecek kaydın kutucuğunu (tik) işaretleyiniz.", "error");
             return;
         }
-        setIsSubmitting(true);
-        try {
-            if (onDeleteRecord) {
-                await onDeleteRecord(selectedDeleteIds, true);
-            }
-            if (showMessage) showMessage(`Makbuz No: ${selectedDuplicate.receiptNumber} seçilen mükerrer kayıt(lar) silindi.`, 'success');
-            setSelectedDuplicate(null);
-        } catch (error) {
-            console.error("Duplicate deletion error:", error);
-            if (showMessage) showMessage("Mükerrer kayıt silindi.", 'success');
-            setSelectedDuplicate(null);
-        } finally {
-            setIsSubmitting(false);
+
+        const allRecords = selectedDuplicate.records || [selectedDuplicate.existing, selectedDuplicate.duplicate].filter(Boolean);
+        if (selectedDeleteIds.length >= allRecords.length) {
+            if (showMessage) showMessage("Mükerrer kayıtlardan en az biri sistemde tutulmalıdır. İkisini de korumak için 'Kalsın' butonunu kullanın.", "error");
+            return;
+        }
+
+        const receiptNo = selectedDuplicate.receiptNumber;
+        const idsToDelete = [...selectedDeleteIds];
+        const dupContext = selectedDuplicate;
+
+        // Instant UI response (< 10ms)
+        setSelectedDuplicate(null);
+        setSelectedDeleteIds([]);
+
+        if (onDeleteRecord) {
+            onDeleteRecord(idsToDelete, true, dupContext);
+        }
+        if (showMessage) {
+            showMessage(`Makbuz No: ${receiptNo} seçilen mükerrer kayıt silindi, asıl kayıt sistemde korundu.`, 'success');
         }
     };
 
@@ -2757,30 +2785,30 @@ const ApprovalRequestsComponent = ({
                             return React.createElement("div", {
                                 key: rec.id || index,
                                 onClick: () => toggleDeleteRecord(rec.id),
-                                className: `p-3.5 rounded-lg border-2 transition-all cursor-pointer space-y-2 text-xs relative ${
+                                className: `p-3.5 rounded-lg border-2 transition-all cursor-pointer space-y-2 text-xs relative select-none ${
                                     isChecked
-                                        ? "bg-red-50/80 border-red-500 ring-2 ring-red-200 shadow-md"
-                                        : "bg-white border-slate-200 hover:border-amber-300 shadow-sm"
+                                        ? "bg-red-50/90 border-red-500 ring-2 ring-red-200 shadow-md"
+                                        : "bg-white border-slate-200 hover:border-emerald-400 shadow-sm"
                                 }`
                             },
                                 React.createElement("div", { className: "flex justify-between items-center border-b pb-2" },
-                                    React.createElement("label", { className: "flex items-center gap-2.5 font-bold cursor-pointer text-slate-800 text-sm" },
+                                    React.createElement("div", { className: "flex items-center gap-2.5 font-bold text-slate-800 text-sm" },
                                         React.createElement("input", {
                                             type: "checkbox",
                                             checked: isChecked,
-                                            onChange: (e) => { e.stopPropagation(); toggleDeleteRecord(rec.id); },
-                                            className: "w-4 h-4 text-red-600 rounded focus:ring-red-500 cursor-pointer accent-red-600"
+                                            readOnly: true,
+                                            className: "w-4 h-4 text-red-600 rounded focus:ring-red-500 pointer-events-none accent-red-600"
                                         }),
                                         `${index + 1}. Kayıt`
                                     ),
                                     isChecked
-                                        ? React.createElement("span", { className: "px-2 py-0.5 rounded text-[10px] font-extrabold bg-red-100 text-red-700 border border-red-300" }, "Silinecek Seçildi")
-                                        : React.createElement("span", { className: "px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600" }, "Koru")
+                                        ? React.createElement("span", { className: "px-2.5 py-0.5 rounded text-[11px] font-extrabold bg-red-100 text-red-700 border border-red-300" }, "Silinecek Seçildi")
+                                        : React.createElement("span", { className: "px-2.5 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-300" }, "Koru (Sistemde Kalacak)")
                                 ),
                                 React.createElement("div", null, React.createElement("span", { className: "text-slate-500 font-medium" }, "Kayıt No: "), rec.kayitNumarasi || '-'),
                                 React.createElement("div", null, React.createElement("span", { className: "text-slate-500 font-medium" }, "Tarih: "), rec.date ? formatDisplayDateOnly(rec.date) : '-'),
                                 React.createElement("div", null, React.createElement("span", { className: "text-slate-500 font-medium" }, "Personel: "), rec.personnelName || '-'),
-                                React.createElement("div", null, React.createElement("span", { className: "text-slate-500 font-medium" }, "Miktar: "), React.createElement("strong", { className: isChecked ? "text-red-700 font-bold" : "text-slate-900" }, `${rec.fuelAmount || 0} lt`)),
+                                React.createElement("div", null, React.createElement("span", { className: "text-slate-500 font-medium" }, "Miktar: "), React.createElement("strong", { className: isChecked ? "text-red-700 font-bold" : "text-emerald-800 font-bold" }, `${rec.fuelAmount || 0} lt`)),
                                 React.createElement("div", null, React.createElement("span", { className: "text-slate-500 font-medium" }, "Konum: "), rec.location || '-')
                             );
                         })
@@ -5548,6 +5576,7 @@ const normalizeSheetRecord = (rec, allPersonnel, index = 0) => {
         receiptNumber: rec['Makbuz Numarası'],
         receiptType: rec['Makbuz Tipi'] || '',
         fuelAmount: Number(parseFloat(String(rec['Yakıt Miktarı (lt)'] || '0').replace(',', '.'))) || 0,
+        _sheetRowIndex: index + 2
     };
     
     if (!normalized.date) return null; 
@@ -6037,32 +6066,40 @@ const App = () => {
         });
     };
 
-    const onDeleteRecord = async (idOrIds, bypassUndo = false) => {
+    const onDeleteRecord = async (idOrIds, bypassUndo = false, dupContext = null) => {
         const ids = Array.isArray(idOrIds) ? idOrIds : [idOrIds];
         const targetIdsSet = new Set(ids);
         
         const recordsToDelete = fuelRecords.filter(r => targetIdsSet.has(r.id));
+        if (recordsToDelete.length === 0) return;
+
+        // 1. Instant optimistic state update (< 5ms)
         setFuelRecords(prev => prev.filter(r => !targetIdsSet.has(r.id)));
 
-        // Send targeted row deletion for each deleted record
+        // 2. Fast background sync (non-blocking, fire-and-forget)
         for (const rec of recordsToDelete) {
+            let occurrenceIdx = rec.occurrenceIndex || null;
+            if (!occurrenceIdx && dupContext && dupContext.records) {
+                const foundIdx = dupContext.records.findIndex(x => x.id === rec.id);
+                if (foundIdx !== -1) occurrenceIdx = foundIdx + 1;
+            }
+
             const deletePayload = {
                 requestId: `del-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
                 id: rec.id,
                 kayitNumarasi: rec.kayitNumarasi,
                 receiptNumber: rec.receiptNumber,
+                rowIndex: rec._sheetRowIndex || null,
+                occurrenceIndex: occurrenceIdx,
                 record: deNormalizeRecord(rec),
                 originalRecord: deNormalizeRecord(rec)
             };
-            try {
-                await postData('onDeleteFuelRecord', deletePayload);
-            } catch (e1) {
-                try {
-                    await postData('onDeleteRecord', deletePayload);
-                } catch (e2) {
-                    console.warn("Targeted row delete sync error:", e2);
-                }
-            }
+
+            postData('onDeleteFuelRecord', deletePayload).catch(e1 => {
+                postData('onDeleteRecord', deletePayload).catch(e2 => {
+                    console.warn("Background targeted row delete sync error:", e2);
+                });
+            });
         }
     };
 
