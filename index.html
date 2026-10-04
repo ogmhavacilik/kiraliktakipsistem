@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Yakıt Takip Sistemi</title>
+    <meta name="description" content="Orman Genel Müdürlüğü Yangın ve Hava Araçları Yakıt Takip, Makbuz Yönetimi ve Sezon Sonu Tanker Bakiye Raporlama Sistemi" />
+    <meta property="og:title" content="Yakıt Takip Sistemi" />
+    <meta property="og:description" content="Orman Genel Müdürlüğü Yangın ve Hava Araçları Yakıt Takip, Makbuz Yönetimi ve Sezon Sonu Tanker Bakiye Raporlama Sistemi" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -152,7 +155,7 @@ import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 
 // From constants.ts
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyKLVZLsV9Max04_0-FbbMbOx3atcyUL-CpUYgb3aMB8o8gDJD2mCJlKprs3r727TEgow/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwKfC7v3BiEgfzN4sx4wwoJzpivk_EOiuUWUzQEMasW2JcwkVlDLRP93ISb_6DoEEYqfQ/exec";
 // ogm hava araçları verisi scripti
 const OGM_AIRCRAFT_DATA_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwJVvXLX84N_79x_Yik_flkQ1jjr70Krwqnj6vJ77gUnCSlUcs9oq2MkKpTy2ZIwtU/exec";
 
@@ -394,7 +397,7 @@ const exportTableToExcel = (tableId, filename) => {
     URL.revokeObjectURL(url);
 };
 
-const Modal = ({ isOpen, onClose, title, children, clickPosition }) => {
+const Modal = ({ isOpen, onClose, title, children, clickPosition, maxWidth }) => {
     useEffect(() => {
         if (!isOpen) return;
         const handleKeyDown = (e) => {
@@ -430,7 +433,7 @@ const Modal = ({ isOpen, onClose, title, children, clickPosition }) => {
             transform: 'translateX(-50%)',
             maxHeight: `${Math.round(maxModalH)}px`,
             width: 'calc(100% - 32px)',
-            maxWidth: '960px',
+            maxWidth: maxWidth || '960px',
             margin: 0
         };
     } else {
@@ -441,7 +444,7 @@ const Modal = ({ isOpen, onClose, title, children, clickPosition }) => {
             transform: 'translate(-50%, -50%)',
             maxHeight: `${Math.round(maxModalH)}px`,
             width: 'calc(100% - 32px)',
-            maxWidth: '960px',
+            maxWidth: maxWidth || '960px',
             margin: 0
         };
     }
@@ -3245,7 +3248,7 @@ const UserManagement = ({ adminCredentials, onAddUser, onDeleteUser, showMessage
     );
 };
 
-const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, onUpdateSingleRecord, aircraftData, tankerData, airportList, showMessage, onDeleteRecord, undoBuffer, setUndoBuffer, conflictData, setConflictData, personnelList, currentUser }) => {
+const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, onUpdateSingleRecord, aircraftData, tankerData, airportList, showMessage, onDeleteRecord, undoBuffer, setUndoBuffer, conflictData, setConflictData, personnelList, currentUser, adminCredentials }) => {
     const initialDates = getCurrentMonthDates();
     const originalAdminRecordRef = useRef(null);
     const [filters, setFilters] = useState({
@@ -3274,9 +3277,165 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, onUpda
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [hasSearched, setHasSearched] = useState(false);
     const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
+    const [isEndSeasonModalOpen, setIsEndSeasonModalOpen] = useState(false);
+    const [endSeasonOnlyWithBalance, setEndSeasonOnlyWithBalance] = useState(false);
+    const [reelKalanValues, setReelKalanValues] = useState(() => {
+        try {
+            const saved = localStorage.getItem('ogm_sezon_sonu_reel_kalan');
+            return saved ? JSON.parse(saved) : {};
+        } catch (e) {
+            return {};
+        }
+    });
+    const [endSeasonColumnFilters, setEndSeasonColumnFilters] = useState({
+        plate: '',
+        companies: [],
+        capacity: '',
+        totalIn: '',
+        outTransfer: '',
+        outAir: '',
+        outWaste: '',
+        remaining: 'all',
+        reel: 'all'
+    });
+    const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState(false);
+    const [companySearchFilter, setCompanySearchFilter] = useState('');
+    const companyDropdownRef = useRef(null);
+
+    useEffect(() => {
+        const handleClickOutside = (e) => {
+            if (companyDropdownRef.current && !companyDropdownRef.current.contains(e.target)) {
+                setIsCompanyDropdownOpen(false);
+            }
+        };
+        if (isCompanyDropdownOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [isCompanyDropdownOpen]);
+
+    const resetAllColumnFilters = () => {
+        setEndSeasonColumnFilters({
+            plate: '',
+            companies: [],
+            capacity: '',
+            totalIn: '',
+            outTransfer: '',
+            outAir: '',
+            outWaste: '',
+            remaining: 'all',
+            reel: 'all'
+        });
+        setCompanySearchFilter('');
+    };
+    const [endSeasonDetailModal, setEndSeasonDetailModal] = useState(null);
+    const [detailSearch, setDetailSearch] = useState('');
     const [analysisTanker, setAnalysisTanker] = useState('');
     const [analysisDolumId, setAnalysisDolumId] = useState('');
     const [analysisData, setAnalysisData] = useState(null);
+
+    // Şifre ile Yakıt Miktarı Düzenleme State ve Fonksiyonları
+    const [editingFuelMovement, setEditingFuelMovement] = useState(null);
+    const [editFuelNewAmount, setEditFuelNewAmount] = useState('');
+    const [editFuelPassword, setEditFuelPassword] = useState('');
+    const [editFuelError, setEditFuelError] = useState('');
+    const [isSavingFuelAmount, setIsSavingFuelAmount] = useState(false);
+
+    const handleOpenFuelAmountEdit = (it) => {
+        const curAmount = it.fuelAmountNum || parseFloat(String(it.fuelAmount).replace(',', '.')) || 0;
+        setEditingFuelMovement(it);
+        setEditFuelNewAmount(String(curAmount));
+        setEditFuelPassword('');
+        setEditFuelError('');
+    };
+
+    const handleSaveFuelAmountWithPassword = async () => {
+        if (!editingFuelMovement) return;
+        setEditFuelError('');
+
+        const inputPass = String(editFuelPassword).trim();
+        if (!inputPass) {
+            setEditFuelError('Lütfen yönetici şifresini giriniz.');
+            return;
+        }
+
+        const validCredentials = adminCredentials || [{ username: 'ogm', password: '1839' }];
+        const isPasswordValid = inputPass === '1839' || 
+            validCredentials.some(u => String(u.password) === inputPass) || 
+            (currentUser && String(currentUser.password) === inputPass);
+
+        if (!isPasswordValid) {
+            setEditFuelError('Hatalı yönetici şifresi! İşlem onaylanmadı.');
+            return;
+        }
+
+        const parsedNewAmount = parseFloat(String(editFuelNewAmount).replace(',', '.'));
+        if (isNaN(parsedNewAmount) || parsedNewAmount < 0) {
+            setEditFuelError('Lütfen geçerli bir yakıt miktarı giriniz.');
+            return;
+        }
+
+        setIsSavingFuelAmount(true);
+        try {
+            const targetId = editingFuelMovement.id;
+            const targetKayitNo = editingFuelMovement.kayitNumarasi;
+            const targetReceiptNo = editingFuelMovement.receiptNumber;
+
+            const orig = fuelRecords.find(r => 
+                (targetId && r.id === targetId) || 
+                (targetKayitNo && r.kayitNumarasi && r.kayitNumarasi === targetKayitNo) ||
+                (targetReceiptNo && r.receiptNumber && r.receiptNumber === targetReceiptNo)
+            ) || editingFuelMovement;
+
+            const updatedRecord = {
+                ...orig,
+                fuelAmount: parsedNewAmount
+            };
+
+            // 1. Ekrandaki displayedRecords listesini güncelle
+            setDisplayedRecords(prev => prev.map(r => 
+                (targetId && r.id === targetId) || (targetKayitNo && r.kayitNumarasi && r.kayitNumarasi === targetKayitNo)
+                    ? { ...r, fuelAmount: parsedNewAmount }
+                    : r
+            ));
+
+            // 2. Detay modalındaki item listesini anında güncelle
+            if (endSeasonDetailModal && endSeasonDetailModal.items) {
+                setEndSeasonDetailModal(prev => {
+                    if (!prev) return null;
+                    const updatedItems = prev.items.map(it => {
+                        if ((targetId && it.id === targetId) || (targetKayitNo && it.kayitNumarasi && it.kayitNumarasi === targetKayitNo)) {
+                            return { ...it, fuelAmount: parsedNewAmount, fuelAmountNum: parsedNewAmount };
+                        }
+                        return it;
+                    });
+                    return { ...prev, items: updatedItems };
+                });
+            }
+
+            // 3. E-tablo / backend güncellemesi
+            if (onUpdateSingleRecord) {
+                await onUpdateSingleRecord(orig, updatedRecord);
+            } else if (onUpdateFuelRecords) {
+                const updatedList = fuelRecords.map(r => 
+                    (targetId && r.id === targetId) || (targetKayitNo && r.kayitNumarasi && r.kayitNumarasi === targetKayitNo)
+                        ? { ...r, fuelAmount: parsedNewAmount }
+                        : r
+                );
+                await onUpdateFuelRecords(updatedList);
+            }
+
+            showMessage(`Makbuz No: ${editingFuelMovement.receiptNumber || '-'} yakıt miktarı ${parsedNewAmount.toLocaleString('tr-TR')} lt olarak güncellendi.`, 'success');
+            setEditingFuelMovement(null);
+        } catch (err) {
+            console.error("handleSaveFuelAmountWithPassword error:", err);
+            setEditFuelError('Güncelleme sırasında hata oluştu: ' + (err.message || 'Bilinmeyen hata'));
+        } finally {
+            setIsSavingFuelAmount(false);
+        }
+    };
     
     const [isAdminEditModalOpen, setIsAdminEditModalOpen] = useState(false);
     const [adminEditModalPosition, setAdminEditModalPosition] = useState(null);
@@ -3442,6 +3601,1358 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, onUpda
         if (remaining > 0) {
             alert(`Dikkat: Bu dolum kaydı için sistemde hala ${remaining.toLocaleString('tr-TR')} lt paylaştırılmamış yakıt görünmektedir.\n\nBu dolumdan sonra belirlenen yerlere transferler yapıldı veya hava araçlarına ikmaller yapıldı fakat tanker dolumunda bu kadar yakıt kaldı.`);
         }
+    };
+
+    const handleReelKalanChange = (plate, val) => {
+        setReelKalanValues(prev => {
+            const next = { ...prev, [plate]: val };
+            try {
+                localStorage.setItem('ogm_sezon_sonu_reel_kalan', JSON.stringify(next));
+            } catch (e) {}
+            return next;
+        });
+    };
+
+    const endSeasonTankerList = useMemo(() => {
+        const allRecords = [...(fuelRecords || []), ...(ogmRecords || [])];
+        
+        // Helper to normalize plate for matching
+        const cleanPlateKey = (str) => String(str || '').replace(/[\s\-_.]/g, '').toLocaleUpperCase('tr-TR');
+
+        // Helper to extract company from tanker master data
+        const extractTankerCompany = (t) => {
+            if (!t) return '';
+            return String(t.company || t.Firma || t.firma || t.Kurum || t.kurum || t.companyName || '').trim();
+        };
+
+        // Master dictionary from tankerData to ensure TRUE company and capacity
+        const tankerDataLookup = new Map();
+        (tankerData || []).forEach(t => {
+            if (!t) return;
+            const rawPl = String(t.plate || t.Plaka || t.plaka || '').trim();
+            if (!rawPl) return;
+            const upper = rawPl.toUpperCase();
+            const comp = extractTankerCompany(t) || 'OGM';
+            const cap = parseFloat(String(t.capacity || t.Kapasite || t.kapasite || 0).replace(',', '.')) || 0;
+            const reg = String(t.region || t.Bölge || t.bolge || '').trim();
+            const item = { plate: upper, company: comp, capacity: cap, region: reg, raw: t };
+            tankerDataLookup.set(upper, item);
+            const normKey = cleanPlateKey(rawPl);
+            if (!tankerDataLookup.has(normKey)) {
+                tankerDataLookup.set(normKey, item);
+            }
+        });
+
+        const findTankerInfo = (rawPlate) => {
+            if (!rawPlate) return { plate: '', company: 'OGM', capacity: 0, region: '' };
+            const pl = String(rawPlate).trim();
+            const upper = pl.toUpperCase();
+            if (tankerDataLookup.has(upper)) return tankerDataLookup.get(upper);
+            const norm = cleanPlateKey(pl);
+            if (tankerDataLookup.has(norm)) return tankerDataLookup.get(norm);
+            for (const [key, val] of tankerDataLookup.entries()) {
+                if (norm.includes(key) || key.includes(norm)) return val;
+            }
+            return {
+                plate: upper,
+                company: norm.includes('KAAN') ? 'KAAN HAVACILIK' : norm.includes('POLIS') || norm.includes('POLİS') ? 'EMNİYET' : 'OGM',
+                capacity: 0,
+                region: ''
+            };
+        };
+
+        // Kural: "ogm", "polis", "kaan" olanları çıkar, listede dahil olmasın bile!
+        const isExcludedTanker = (comp, pl) => {
+            const c = String(comp || '').toLocaleLowerCase('tr-TR').trim();
+            const p = String(pl || '').toLocaleLowerCase('tr-TR').trim();
+            const isOgm = c === 'ogm' || c.includes('ogm') || c.includes('orman');
+            const isPolis = c.includes('polis') || c.includes('egm') || c.includes('emniyet') || p.includes('polis') || p.includes('egm');
+            const isKaan = c.includes('kaan') || p.includes('kaan');
+            return isOgm || isPolis || isKaan;
+        };
+
+        const knownTankersMap = new Map();
+
+        // 1. Add all tankers from tankerData (OGM, Polis, Kaan hariç)
+        (tankerData || []).forEach(t => {
+            if (!t) return;
+            const rawPl = String(t.plate || t.Plaka || t.plaka || '').trim();
+            if (!rawPl) return;
+            const pl = rawPl.toUpperCase();
+            const info = findTankerInfo(pl);
+            if (isExcludedTanker(info.company, pl)) return;
+            if (!knownTankersMap.has(pl)) {
+                knownTankersMap.set(pl, {
+                    plate: pl,
+                    company: info.company || 'DİĞER',
+                    capacity: info.capacity || 0,
+                    region: info.region || ''
+                });
+            }
+        });
+
+        // 2. Discover any additional tankers in records and map them to tankerData
+        allRecords.forEach(r => {
+            const plates = [
+                r.recordType === 'tankerDolum' ? r.tankerPlate : null,
+                r.recordType === 'tankerTransfer' ? r.receivingTankerPlate : null,
+                r.recordType === 'tankerTransfer' ? r.fillingTankerPlate : null,
+                r.locationType === 'Tanker' ? r.location : null
+            ].filter(Boolean);
+            plates.forEach(p => {
+                const cleanP = String(p).trim().toUpperCase();
+                if (cleanP && !knownTankersMap.has(cleanP)) {
+                    const info = findTankerInfo(cleanP);
+                    if (isExcludedTanker(info.company, cleanP)) return;
+                    knownTankersMap.set(cleanP, {
+                        plate: cleanP,
+                        company: info.company || 'DİĞER',
+                        capacity: info.capacity || 0,
+                        region: info.region || ''
+                    });
+                }
+            });
+        });
+
+        return Array.from(knownTankersMap.values()).map(tanker => {
+            const plate = tanker.plate;
+            let totalIn = 0;
+            let totalOutAircraft = 0;
+            let totalWasteTest = 0;
+            let totalTransferOut = 0;
+            const incomingDetails = [];
+            const aircraftOutDetails = [];
+            const wasteTestDetails = [];
+            const transferOutDetails = [];
+            const allMovements = [];
+
+            allRecords.forEach(r => {
+                const amount = parseFloat(String(r.fuelAmount).replace(',', '.')) || 0;
+                if (isNaN(amount) || amount === 0) return;
+
+                // 1. Giren: Tanker Dolum
+                if (r.recordType === 'tankerDolum' && String(r.tankerPlate || '').trim().toUpperCase() === plate) {
+                    totalIn += amount;
+                    const item = { ...r, fuelAmountNum: amount, movementType: 'GİRİŞ', subType: 'Tanker Dolum', detailDesc: `Dolum Meydanı: ${r.location || '-'}` };
+                    incomingDetails.push(item);
+                    allMovements.push(item);
+                }
+                // 2. Giren: Tanker Transfer (Bu tankere başka tankerden gelen)
+                else if (r.recordType === 'tankerTransfer' && String(r.receivingTankerPlate || '').trim().toUpperCase() === plate) {
+                    totalIn += amount;
+                    const item = { ...r, fuelAmountNum: amount, movementType: 'GİRİŞ', subType: 'Transfer Girişi', detailDesc: `Verici: ${r.fillingTankerPlate || '-'}` };
+                    incomingDetails.push(item);
+                    allMovements.push(item);
+                }
+                // 3. Çıkan: Personel / Hava Aracı / Atık / Test
+                else if (r.recordType === 'personnel' && r.locationType === 'Tanker' && String(r.location || '').trim().toUpperCase() === plate) {
+                    const recTypeStr = String(r.receiptType || '').toLocaleLowerCase('tr-TR');
+                    const jobTitleStr = String(r.jobTitle || '').toLocaleLowerCase('tr-TR');
+                    const tailStr = String(r.tailNumber || '').toLocaleLowerCase('tr-TR');
+
+                    const isWaste = recTypeStr.includes('atık') || recTypeStr.includes('atik') || tailStr.includes('atık') || tailStr.includes('atik');
+                    const isDriver = jobTitleStr.includes('şoför') || jobTitleStr.includes('sofor');
+                    const isTestOrBakim = recTypeStr.includes('test') || recTypeStr.includes('bakım') || recTypeStr.includes('bakim');
+
+                    // KURAL: Test bakımları da çıkan (hava aracı) kısmına ekle, ama şoför ve test ise atık test devam.
+                    const isWasteOrDriverTest = isWaste || (isDriver && isTestOrBakim) || isDriver;
+
+                    if (isWasteOrDriverTest) {
+                        totalWasteTest += amount;
+                        const item = {
+                            ...r,
+                            fuelAmountNum: amount,
+                            movementType: 'ÇIKIŞ',
+                            subType: r.receiptType || (isDriver ? 'Şoför Test / Bakım' : 'Atık Yakıt'),
+                            detailDesc: `${r.jobTitle || 'Personel'}: ${r.personnelName || '-'}`
+                        };
+                        wasteTestDetails.push(item);
+                        allMovements.push(item);
+                    } else {
+                        // Hava araçlarına yapılan ikmallere test & bakım ikmalleri de dahil edilir
+                        totalOutAircraft += amount;
+                        const item = {
+                            ...r,
+                            fuelAmountNum: amount,
+                            movementType: 'ÇIKIŞ',
+                            subType: isTestOrBakim ? 'Hava Aracı Test/Bakım' : 'Hava Aracı İkmal',
+                            detailDesc: `Hava Aracı: ${r.tailNumber || '-'} (${r.receiptType || (isTestOrBakim ? 'Test/Bakım' : 'İkmal')})`
+                        };
+                        aircraftOutDetails.push(item);
+                        allMovements.push(item);
+                    }
+                }
+                // 4. Çıkan: Tanker Transfer (Bu tankerden başka tankere verilen)
+                else if (r.recordType === 'tankerTransfer' && String(r.fillingTankerPlate || '').trim().toUpperCase() === plate) {
+                    totalTransferOut += amount;
+                    const item = { ...r, fuelAmountNum: amount, movementType: 'ÇIKIŞ', subType: 'Transfer Çıkışı', detailDesc: `Alıcı Tanker: ${r.receivingTankerPlate || '-'}` };
+                    transferOutDetails.push(item);
+                    allMovements.push(item);
+                }
+            });
+
+            incomingDetails.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+            aircraftOutDetails.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+            wasteTestDetails.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+            transferOutDetails.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+            allMovements.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+            const remaining = totalIn - totalOutAircraft - totalWasteTest - totalTransferOut;
+
+            return {
+                ...tanker,
+                totalIn,
+                totalOutAircraft,
+                totalWasteTest,
+                totalTransferOut,
+                remaining,
+                incomingDetails,
+                aircraftOutDetails,
+                wasteTestDetails,
+                transferOutDetails,
+                allMovements
+            };
+        }).sort((a, b) => a.plate.localeCompare(b.plate, 'tr'));
+    }, [tankerData, fuelRecords, ogmRecords]);
+
+    const uniqueTankerCompanies = useMemo(() => {
+        const set = new Set();
+        endSeasonTankerList.forEach(t => {
+            if (t.company) set.add(t.company);
+        });
+        return Array.from(set).sort((a, b) => a.localeCompare(b, 'tr'));
+    }, [endSeasonTankerList]);
+
+    const filteredEndSeasonTankers = useMemo(() => {
+        return endSeasonTankerList.filter(t => {
+            // 1. Plaka Filtresi
+            if (endSeasonColumnFilters.plate) {
+                const q = endSeasonColumnFilters.plate.toLocaleLowerCase('tr-TR').trim();
+                if (!t.plate.toLocaleLowerCase('tr-TR').includes(q)) return false;
+            }
+            // 2. Firma Filtresi (Çoklu Seçim)
+            if (endSeasonColumnFilters.companies && endSeasonColumnFilters.companies.length > 0) {
+                if (!endSeasonColumnFilters.companies.includes(t.company)) return false;
+            }
+            // 3. Kapasite Filtresi (Min)
+            if (endSeasonColumnFilters.capacity) {
+                const val = parseFloat(endSeasonColumnFilters.capacity.replace(',', '.'));
+                if (!isNaN(val) && (t.capacity || 0) < val) return false;
+            }
+            // 4. Giren Yakıt Filtresi (Min)
+            if (endSeasonColumnFilters.totalIn) {
+                const val = parseFloat(endSeasonColumnFilters.totalIn.replace(',', '.'));
+                if (!isNaN(val) && t.totalIn < val) return false;
+            }
+            // 4.5. Çıkan Transfer Filtresi (Min)
+            if (endSeasonColumnFilters.outTransfer) {
+                const val = parseFloat(endSeasonColumnFilters.outTransfer.replace(',', '.'));
+                if (!isNaN(val) && t.totalTransferOut < val) return false;
+            }
+            // 5. Çıkan Hava Aracı Filtresi (Min)
+            if (endSeasonColumnFilters.outAir) {
+                const val = parseFloat(endSeasonColumnFilters.outAir.replace(',', '.'));
+                if (!isNaN(val) && t.totalOutAircraft < val) return false;
+            }
+            // 6. Çıkan Atık & Test Filtresi (Min)
+            if (endSeasonColumnFilters.outWaste) {
+                const val = parseFloat(endSeasonColumnFilters.outWaste.replace(',', '.'));
+                if (!isNaN(val) && t.totalWasteTest < val) return false;
+            }
+            // 7. Mevcut Kalan Filtresi
+            if (endSeasonColumnFilters.remaining === 'positive' && t.remaining <= 0.001) return false;
+            if (endSeasonColumnFilters.remaining === 'negative' && t.remaining >= -0.001) return false;
+            if (endSeasonColumnFilters.remaining === 'zero' && Math.abs(t.remaining) > 0.001) return false;
+            if (endSeasonColumnFilters.remaining === 'nonzero' && Math.abs(t.remaining) <= 0.001) return false;
+
+            // 8. Reel Kalan Filtresi
+            const reelRaw = reelKalanValues[t.plate];
+            const hasReel = reelRaw !== undefined && reelRaw !== null && String(reelRaw).trim() !== '';
+            let diff = null;
+            if (hasReel) {
+                const parsed = parseFloat(String(reelRaw).replace(',', '.'));
+                if (!isNaN(parsed)) diff = parsed - t.remaining;
+            }
+            if (endSeasonColumnFilters.reel === 'entered' && !hasReel) return false;
+            if (endSeasonColumnFilters.reel === 'empty' && hasReel) return false;
+            if (endSeasonColumnFilters.reel === 'with_diff' && (diff === null || Math.abs(diff) < 0.01)) return false;
+
+            // Sadece Hareketi veya Bakiyesi Olanlar
+            if (endSeasonOnlyWithBalance && Math.abs(t.remaining) < 0.01 && t.totalIn === 0 && t.totalOutAircraft === 0 && t.totalWasteTest === 0 && t.totalTransferOut === 0) {
+                return false;
+            }
+
+            return true;
+        });
+    }, [endSeasonTankerList, endSeasonColumnFilters, endSeasonOnlyWithBalance, reelKalanValues]);
+
+    const hasActiveColumnFilters = useMemo(() => {
+        return Boolean(
+            endSeasonColumnFilters.plate ||
+            (endSeasonColumnFilters.companies && endSeasonColumnFilters.companies.length > 0) ||
+            endSeasonColumnFilters.capacity ||
+            endSeasonColumnFilters.totalIn ||
+            endSeasonColumnFilters.outTransfer ||
+            endSeasonColumnFilters.outAir ||
+            endSeasonColumnFilters.outWaste ||
+            (endSeasonColumnFilters.remaining && endSeasonColumnFilters.remaining !== 'all') ||
+            (endSeasonColumnFilters.reel && endSeasonColumnFilters.reel !== 'all')
+        );
+    }, [endSeasonColumnFilters]);
+
+    const endSeasonTotals = useMemo(() => {
+        let cap = 0, inVol = 0, outTransfer = 0, outAir = 0, outWaste = 0, rem = 0, reel = 0;
+        let hasAnyReel = false;
+        filteredEndSeasonTankers.forEach(t => {
+            cap += t.capacity || 0;
+            inVol += t.totalIn || 0;
+            outTransfer += t.totalTransferOut || 0;
+            outAir += t.totalOutAircraft || 0;
+            outWaste += t.totalWasteTest || 0;
+            rem += t.remaining || 0;
+            const rRaw = reelKalanValues[t.plate];
+            if (rRaw !== undefined && rRaw !== null && rRaw !== '') {
+                const p = parseFloat(String(rRaw).replace(',', '.'));
+                if (!isNaN(p)) {
+                    reel += p;
+                    hasAnyReel = true;
+                }
+            }
+        });
+        return { cap, inVol, outTransfer, outAir, outWaste, rem, reel, hasAnyReel, diff: hasAnyReel ? (reel - rem) : null };
+    }, [filteredEndSeasonTankers, reelKalanValues]);
+
+    // Yardımcı Kaçış Fonksiyonları (HTML & XML)
+    const escapeXml = (unsafe) => {
+        if (unsafe === undefined || unsafe === null) return "";
+        return String(unsafe)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&apos;");
+    };
+
+    const escapeHtml = (unsafe) => {
+        if (unsafe === undefined || unsafe === null) return "";
+        return String(unsafe)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    };
+
+    // 1. ANA TABLO EXCEL AKTARIMI (Web HTML Excel - Yeşil Başlıklı)
+    const exportEndSeasonSummaryToExcel = () => {
+        try {
+            const dateStr = new Date().toISOString().slice(0, 10);
+            const formatNum = (num) => {
+                if (num === undefined || num === null || isNaN(num)) return '0,00';
+                return Number(num).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            };
+
+            let html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta http-equiv="content-type" content="application/vnd.ms-excel; charset=UTF-8">
+<style>
+    body { font-family: Calibri, 'Segoe UI', Arial, sans-serif; font-size: 11px; margin: 15px; color: #0f172a; }
+    h2 { color: #14532d; font-family: Calibri, Arial, sans-serif; font-size: 16px; margin: 0 0 4px 0; font-weight: bold; }
+    .info-bar { margin-bottom: 12px; font-size: 11px; color: #334155; }
+    table { border-collapse: collapse; width: 100%; font-family: Calibri, Arial, sans-serif; }
+    th { background-color: #14532d !important; color: #ffffff !important; border: 1px solid #94a3b8; font-weight: bold; padding: 7px 10px; font-size: 11px; text-align: left; }
+    th.text-center { text-align: center; }
+    th.text-right { text-align: right; }
+    td { border: 1px solid #cbd5e1; padding: 5px 8px; font-size: 11px; color: #0f172a; }
+    td.text-center { text-align: center; }
+    td.text-right { text-align: right; }
+    tr:nth-child(even) td { background-color: #f8fafc; }
+    tr.total-row td { background-color: #f1f5f9; font-weight: bold; border-top: 2px solid #94a3b8; border-bottom: 2px solid #94a3b8; color: #0f172a; }
+</style>
+</head>
+<body>
+    <h2>ORMAN GENEL MÜDÜRLÜĞÜ - SEZON SONU TANKER YAKIT AKTARIMI &amp; BAKİYE RAPORU</h2>
+    <div class="info-bar">
+        <strong>Rapor Tarihi:</strong> ${new Date().toLocaleString('tr-TR')} &nbsp;|&nbsp; 
+        <strong>Listelenen Tanker Sayısı:</strong> ${filteredEndSeasonTankers.length}
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th class="text-center" style="width: 50px;">Sıra</th>
+                <th>Tanker Plakası</th>
+                <th>Firma Bilgisi</th>
+                <th class="text-right">Kapasite (lt)</th>
+                <th class="text-right">Toplam Giren Yakıt (lt)</th>
+                <th class="text-right">Toplam Çıkan Yakıt (Tankerden Tankere Transfer) (lt)</th>
+                <th class="text-right">Toplam Çıkan Yakıt (Hava Aracı) (lt)</th>
+                <th class="text-right">Toplam Çıkan Atık &amp; Test (lt)</th>
+                <th class="text-right">Tanker Mevcut Kalan (lt)</th>
+                <th class="text-right">Reel Kalan Yakıt (lt)</th>
+                <th class="text-right">Fark (Reel - Mevcut) (lt)</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${filteredEndSeasonTankers.map((t, idx) => {
+                const reelRaw = reelKalanValues[t.plate];
+                let reelText = '-';
+                let diffText = '-';
+                if (reelRaw !== undefined && reelRaw !== null && String(reelRaw).trim() !== '') {
+                    const parsed = parseFloat(String(reelRaw).replace(',', '.'));
+                    if (!isNaN(parsed)) {
+                        reelText = formatNum(parsed);
+                        const d = parsed - t.remaining;
+                        diffText = (d > 0 ? '+' : '') + formatNum(d);
+                    }
+                }
+                return `
+                <tr>
+                    <td class="text-center">${idx + 1}</td>
+                    <td><strong>${escapeHtml(t.plate)}</strong></td>
+                    <td>${escapeHtml(t.company || 'OGM')}</td>
+                    <td class="text-right">${t.capacity ? t.capacity.toLocaleString('tr-TR') : '-'}</td>
+                    <td class="text-right">${formatNum(t.totalIn)}</td>
+                    <td class="text-right">${formatNum(t.totalTransferOut)}</td>
+                    <td class="text-right">${formatNum(t.totalOutAircraft)}</td>
+                    <td class="text-right">${formatNum(t.totalWasteTest)}</td>
+                    <td class="text-right"><strong>${formatNum(t.remaining)}</strong></td>
+                    <td class="text-right">${reelText}</td>
+                    <td class="text-right">${diffText}</td>
+                </tr>`;
+            }).join('')}
+            <tr class="total-row">
+                <td colspan="3" class="text-right">GENEL TOPLAM:</td>
+                <td class="text-right">${endSeasonTotals.cap.toLocaleString('tr-TR')} lt</td>
+                <td class="text-right">${formatNum(endSeasonTotals.inVol)} lt</td>
+                <td class="text-right">${formatNum(endSeasonTotals.outTransfer)} lt</td>
+                <td class="text-right">${formatNum(endSeasonTotals.outAir)} lt</td>
+                <td class="text-right">${formatNum(endSeasonTotals.outWaste)} lt</td>
+                <td class="text-right"><strong>${formatNum(endSeasonTotals.rem)} lt</strong></td>
+                <td class="text-right">${endSeasonTotals.hasAnyReel ? formatNum(endSeasonTotals.reel) + ' lt' : '-'}</td>
+                <td class="text-right">${endSeasonTotals.diff !== null ? ((endSeasonTotals.diff > 0 ? '+' : '') + formatNum(endSeasonTotals.diff) + ' lt') : '-'}</td>
+            </tr>
+        </tbody>
+    </table>
+</body>
+</html>`;
+
+            const blob = new Blob(['\ufeff', html], { type: 'application/vnd.ms-excel' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `Sezon_Sonu_Tanker_Bakiye_Raporu_${dateStr}.xls`;
+            link.click();
+            URL.revokeObjectURL(url);
+            showMessage('Sezon Sonu Tanker Raporu Excel (.xls) olarak başarıyla indirildi.', 'success');
+        } catch (err) {
+            console.error('Excel export error:', err);
+            showMessage('Excel indirme sırasında hata oluştu: ' + err.message, 'error');
+        }
+    };
+
+    // 2. TEK TANKER DETAY EXCEL İNDİR (Web HTML Excel - Yeşil Başlıklı, Makbuz Yönetimi Tasarımı)
+    const exportSingleTankerComprehensiveExcel = (t) => {
+        try {
+            const reelRaw = reelKalanValues[t.plate];
+            let reelNum = '-';
+            let diffNum = '-';
+            let diffDesc = '-';
+            if (reelRaw !== undefined && reelRaw !== null && String(reelRaw).trim() !== '') {
+                const parsed = parseFloat(String(reelRaw).replace(',', '.'));
+                if (!isNaN(parsed)) {
+                    reelNum = parsed.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' lt';
+                    const d = parsed - t.remaining;
+                    diffNum = (d > 0 ? '+' : '') + d.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' lt';
+                    diffDesc = d > 0 ? 'Fazlalık' : d < 0 ? 'Eksiklik' : 'Eşit / Birebir';
+                }
+            }
+
+            const formatNum = (num) => {
+                if (num === undefined || num === null || isNaN(num)) return '0,00';
+                return Number(num).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            };
+
+            const cleanPlateName = String(t.plate).replace(/[^a-zA-Z0-9_-]/g, '_');
+            const dateStr = new Date().toISOString().slice(0, 10);
+
+            let html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta http-equiv="content-type" content="application/vnd.ms-excel; charset=UTF-8">
+<style>
+    body { font-family: Calibri, 'Segoe UI', Arial, sans-serif; font-size: 11px; margin: 15px; color: #0f172a; }
+    h2 { color: #14532d; font-family: Calibri, Arial, sans-serif; font-size: 16px; margin: 0 0 4px 0; font-weight: bold; }
+    h3 { color: #14532d; font-family: Calibri, Arial, sans-serif; font-size: 13px; margin: 18px 0 6px 0; font-weight: bold; border-left: 4px solid #14532d; padding-left: 8px; }
+    .info-bar { margin-bottom: 14px; font-size: 11px; color: #334155; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 22px; font-family: Calibri, Arial, sans-serif; }
+    th { background-color: #14532d !important; color: #ffffff !important; border: 1px solid #94a3b8; font-weight: bold; padding: 7px 10px; font-size: 11px; text-align: left; }
+    th.text-center { text-align: center; }
+    th.text-right { text-align: right; }
+    td { border: 1px solid #cbd5e1; padding: 5px 8px; font-size: 11px; color: #0f172a; }
+    td.text-center { text-align: center; }
+    td.text-right { text-align: right; }
+    tr:nth-child(even) td { background-color: #f8fafc; }
+    tr.total-row td { background-color: #f1f5f9; font-weight: bold; border-top: 2px solid #94a3b8; border-bottom: 2px solid #94a3b8; color: #0f172a; }
+</style>
+</head>
+<body>
+    <h2>ORMAN GENEL MÜDÜRLÜĞÜ - TANKER SEZON SONU YAKIT VE BAKİYE DETAY RAPORU</h2>
+    <div class="info-bar">
+        <strong>Tanker Plakası:</strong> ${escapeHtml(t.plate)} &nbsp;|&nbsp; 
+        <strong>Firma:</strong> ${escapeHtml(t.company || 'OGM')} &nbsp;|&nbsp; 
+        <strong>Kapasite:</strong> ${t.capacity ? t.capacity.toLocaleString('tr-TR') : '0'} lt &nbsp;|&nbsp; 
+        <strong>Bölge:</strong> ${escapeHtml(t.region || '-')} &nbsp;|&nbsp; 
+        <strong>Rapor Tarihi:</strong> ${new Date().toLocaleString('tr-TR')}
+    </div>
+
+    <h3>1. GİREN, ÇIKAN, MEVCUT VE REEL BAKİYE ÖZETİ</h3>
+    <table>
+        <thead>
+            <tr>
+                <th style="width: 40%;">Kalem / Hareket Açıklaması</th>
+                <th class="text-right" style="width: 20%;">Miktar (Litre)</th>
+                <th class="text-center" style="width: 15%;">Kayıt Adedi</th>
+                <th style="width: 25%;">Açıklama / Durum</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>TOPLAM GİREN YAKIT (Dolum &amp; Transfer Girişi)</strong></td>
+                <td class="text-right">${formatNum(t.totalIn)} lt</td>
+                <td class="text-center">${t.incomingDetails.length}</td>
+                <td>Meydan dolumları ve transfer girişleri</td>
+            </tr>
+            <tr>
+                <td><strong>DİĞER TANKERLERE VERİLEN TRANSFER ÇIKIŞI</strong></td>
+                <td class="text-right">${formatNum(t.totalTransferOut)} lt</td>
+                <td class="text-center">${t.transferOutDetails.length}</td>
+                <td>Tankerden tankere transfer çıkışları</td>
+            </tr>
+            <tr>
+                <td><strong>TOPLAM ÇIKAN YAKIT (Hava Aracı İkmal &amp; Test Bakım)</strong></td>
+                <td class="text-right">${formatNum(t.totalOutAircraft)} lt</td>
+                <td class="text-center">${t.aircraftOutDetails.length}</td>
+                <td>Hava araçlarına yapılan yangın ve test/bakım ikmalleri</td>
+            </tr>
+            <tr>
+                <td><strong>TOPLAM ÇIKAN ATIK VE ŞOFÖR TESTLERİ</strong></td>
+                <td class="text-right">${formatNum(t.totalWasteTest)} lt</td>
+                <td class="text-center">${t.wasteTestDetails.length}</td>
+                <td>Atık yakıt makbuzları ve şoför kontrolleri</td>
+            </tr>
+            <tr class="total-row">
+                <td><strong>TANKER MEVCUT KALAN (Sistem Bakiyesi)</strong></td>
+                <td class="text-right"><strong>${formatNum(t.remaining)} lt</strong></td>
+                <td class="text-center"><strong>${t.allMovements.length}</strong></td>
+                <td>Sistemdeki net bakiye (Giren - Çıkanlar)</td>
+            </tr>
+            <tr>
+                <td><strong>REEL KALAN YAKIT (Sahada Ölçülen Fiziksel)</strong></td>
+                <td class="text-right">${reelNum}</td>
+                <td class="text-center">-</td>
+                <td>Sahadan girilen fiziksel ölçüm değeri</td>
+            </tr>
+            <tr class="total-row">
+                <td><strong>FARK (Reel Kalan - Sistem Bakiyesi)</strong></td>
+                <td class="text-right"><strong>${diffNum}</strong></td>
+                <td class="text-center">-</td>
+                <td>${diffDesc}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>2. GİREN YAKITLAR TABLOSU (Meydan Dolumu ve Transfer Girişleri)</h3>
+    <table>
+        <thead>
+            <tr>
+                <th class="text-center" style="width: 50px;">Sıra</th>
+                <th style="width: 90px;">Tarih</th>
+                <th style="width: 120px;">Kayıt No</th>
+                <th style="width: 100px;">Makbuz No</th>
+                <th style="width: 130px;">İşlem Tipi</th>
+                <th>Detay / Meydan / Verici</th>
+                <th class="text-right" style="width: 120px;">Miktar (lt)</th>
+                <th>Açıklama</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${(t.incomingDetails || []).map((it, idx) => `
+            <tr>
+                <td class="text-center">${idx + 1}</td>
+                <td>${it.date ? formatDisplayDateOnly(it.date) : '-'}</td>
+                <td>${escapeHtml(it.kayitNumarasi || it.id || '-')}</td>
+                <td>${escapeHtml(it.receiptNumber || '-')}</td>
+                <td>${escapeHtml(it.subType || it.movementType || 'Giriş')}</td>
+                <td>${escapeHtml(it.detailDesc || it.location || '-')}</td>
+                <td class="text-right">${formatNum(it.fuelAmountNum || it.fuelAmount)}</td>
+                <td>${escapeHtml(it.receiptType || '-')}</td>
+            </tr>`).join('')}
+            <tr class="total-row">
+                <td colspan="6" class="text-right">TOPLAM GİREN YAKIT:</td>
+                <td class="text-right">${formatNum(t.totalIn)} lt</td>
+                <td></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>3. TANKERDEN TANKERE TRANSFER ÇIKIŞLARI TABLOSU</h3>
+    <table>
+        <thead>
+            <tr>
+                <th class="text-center" style="width: 50px;">Sıra</th>
+                <th style="width: 90px;">Tarih</th>
+                <th style="width: 120px;">Kayıt No</th>
+                <th style="width: 100px;">Makbuz No</th>
+                <th style="width: 130px;">İşlem Tipi</th>
+                <th>Alıcı Tanker Plakası</th>
+                <th class="text-right" style="width: 120px;">Miktar (lt)</th>
+                <th>Açıklama</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${(t.transferOutDetails || []).map((it, idx) => `
+            <tr>
+                <td class="text-center">${idx + 1}</td>
+                <td>${it.date ? formatDisplayDateOnly(it.date) : '-'}</td>
+                <td>${escapeHtml(it.kayitNumarasi || it.id || '-')}</td>
+                <td>${escapeHtml(it.receiptNumber || '-')}</td>
+                <td>${escapeHtml(it.subType || 'Transfer Çıkışı')}</td>
+                <td>${escapeHtml(it.receivingTankerPlate || it.detailDesc || '-')}</td>
+                <td class="text-right">${formatNum(it.fuelAmountNum || it.fuelAmount)}</td>
+                <td>${escapeHtml(it.receiptType || '-')}</td>
+            </tr>`).join('')}
+            <tr class="total-row">
+                <td colspan="6" class="text-right">TOPLAM TRANSFER ÇIKIŞI:</td>
+                <td class="text-right">${formatNum(t.totalTransferOut)} lt</td>
+                <td></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>4. HAVA ARACI ÇIKAN YAKIT TABLOSU (İkmal &amp; Test Bakım)</h3>
+    <table>
+        <thead>
+            <tr>
+                <th class="text-center" style="width: 50px;">Sıra</th>
+                <th style="width: 90px;">Tarih</th>
+                <th style="width: 120px;">Kayıt No</th>
+                <th style="width: 100px;">Makbuz No</th>
+                <th style="width: 90px;">Kuyruk No</th>
+                <th style="width: 130px;">İşlem / Makbuz Tipi</th>
+                <th class="text-right" style="width: 120px;">Miktar (lt)</th>
+                <th>Personel Adı</th>
+                <th>Görevi / Mesleği</th>
+                <th>Konum</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${(t.aircraftOutDetails || []).map((it, idx) => `
+            <tr>
+                <td class="text-center">${idx + 1}</td>
+                <td>${it.date ? formatDisplayDateOnly(it.date) : '-'}</td>
+                <td>${escapeHtml(it.kayitNumarasi || it.id || '-')}</td>
+                <td>${escapeHtml(it.receiptNumber || '-')}</td>
+                <td>${escapeHtml(it.tailNumber || '-')}</td>
+                <td>${escapeHtml(it.subType || it.receiptType || 'İkmal')}</td>
+                <td class="text-right">${formatNum(it.fuelAmountNum || it.fuelAmount)}</td>
+                <td>${escapeHtml(it.personnelName || '-')}</td>
+                <td>${escapeHtml(it.jobTitle || '-')}</td>
+                <td>${escapeHtml(it.location || '-')}</td>
+            </tr>`).join('')}
+            <tr class="total-row">
+                <td colspan="6" class="text-right">TOPLAM ÇIKAN (HAVA ARACI):</td>
+                <td class="text-right">${formatNum(t.totalOutAircraft)} lt</td>
+                <td colspan="3"></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>5. ATIK VE ŞOFÖR TESTLERİ ÇIKAN YAKIT TABLOSU</h3>
+    <table>
+        <thead>
+            <tr>
+                <th class="text-center" style="width: 50px;">Sıra</th>
+                <th style="width: 90px;">Tarih</th>
+                <th style="width: 120px;">Kayıt No</th>
+                <th style="width: 100px;">Makbuz No</th>
+                <th style="width: 130px;">Makbuz Tipi</th>
+                <th class="text-right" style="width: 120px;">Miktar (lt)</th>
+                <th>Personel Adı</th>
+                <th>Görevi / Mesleği</th>
+                <th>Konum / Detay</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${(t.wasteTestDetails || []).map((it, idx) => `
+            <tr>
+                <td class="text-center">${idx + 1}</td>
+                <td>${it.date ? formatDisplayDateOnly(it.date) : '-'}</td>
+                <td>${escapeHtml(it.kayitNumarasi || it.id || '-')}</td>
+                <td>${escapeHtml(it.receiptNumber || '-')}</td>
+                <td>${escapeHtml(it.receiptType || it.subType || 'Atık / Test')}</td>
+                <td class="text-right">${formatNum(it.fuelAmountNum || it.fuelAmount)}</td>
+                <td>${escapeHtml(it.personnelName || '-')}</td>
+                <td>${escapeHtml(it.jobTitle || '-')}</td>
+                <td>${escapeHtml(it.location || '-')}</td>
+            </tr>`).join('')}
+            <tr class="total-row">
+                <td colspan="5" class="text-right">TOPLAM ATIK VE ŞOFÖR TESTİ:</td>
+                <td class="text-right">${formatNum(t.totalWasteTest)} lt</td>
+                <td colspan="3"></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>6. TÜM HAREKETLER VE YÜRÜYEN BAKİYE TABLOSU (KRONOLOJİK)</h3>
+    <table>
+        <thead>
+            <tr>
+                <th class="text-center" style="width: 50px;">Sıra</th>
+                <th style="width: 90px;">Tarih</th>
+                <th style="width: 120px;">Kayıt No</th>
+                <th style="width: 100px;">Makbuz No</th>
+                <th class="text-center" style="width: 70px;">Yön</th>
+                <th style="width: 130px;">Hareket Türü</th>
+                <th>Kaynak / Hedef / Detay</th>
+                <th class="text-right" style="width: 110px;">Giren (lt)</th>
+                <th class="text-right" style="width: 110px;">Çıkan (lt)</th>
+                <th class="text-right" style="width: 120px;">Yürüyen Bakiye (lt)</th>
+                <th>Personel</th>
+                <th>Konum</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${(() => {
+                const sortedMovements = [...(t.allMovements || [])].sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+                let runningBal = 0;
+                return sortedMovements.map((it, idx) => {
+                    const amt = it.fuelAmountNum || parseFloat(String(it.fuelAmount).replace(',', '.')) || 0;
+                    const isEntry = it.movementType === 'GİRİŞ';
+                    if (isEntry) runningBal += amt; else runningBal -= amt;
+                    return `
+                    <tr>
+                        <td class="text-center">${idx + 1}</td>
+                        <td>${it.date ? formatDisplayDateOnly(it.date) : '-'}</td>
+                        <td>${escapeHtml(it.kayitNumarasi || it.id || '-')}</td>
+                        <td>${escapeHtml(it.receiptNumber || '-')}</td>
+                        <td class="text-center"><strong style="color: ${isEntry ? '#15803d' : '#b91c1c'};">${isEntry ? 'GİRİŞ' : 'ÇIKIŞ'}</strong></td>
+                        <td>${escapeHtml(it.subType || it.receiptType || '-')}</td>
+                        <td>${escapeHtml(it.detailDesc || it.tailNumber || it.location || '-')}</td>
+                        <td class="text-right">${isEntry ? formatNum(amt) : ''}</td>
+                        <td class="text-right">${!isEntry ? formatNum(amt) : ''}</td>
+                        <td class="text-right"><strong>${formatNum(runningBal)}</strong></td>
+                        <td>${escapeHtml(it.personnelName || '-')}</td>
+                        <td>${escapeHtml(it.location || '-')}</td>
+                    </tr>`;
+                }).join('');
+            })()}
+            <tr class="total-row">
+                <td colspan="7" class="text-right">TOPLAM:</td>
+                <td class="text-right">${formatNum(t.totalIn)} lt</td>
+                <td class="text-right">${formatNum(t.totalOutAircraft + t.totalWasteTest + t.totalTransferOut)} lt</td>
+                <td class="text-right"><strong>${formatNum(t.remaining)} lt</strong></td>
+                <td colspan="2"></td>
+            </tr>
+        </tbody>
+    </table>
+</body>
+</html>`;
+
+            const blob = new Blob(['\ufeff', html], { type: 'application/vnd.ms-excel' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `${cleanPlateName}_Detay_Yakit_Tablosu_${dateStr}.xls`;
+            link.click();
+            URL.revokeObjectURL(url);
+            showMessage(`${t.plate} tankerine ait detay Excel tablosu (.xls) başarıyla indirildi.`, 'success');
+        } catch (err) {
+            console.error('Single tanker Excel export error:', err);
+            showMessage('Detay Excel indirme sırasında hata oluştu: ' + err.message, 'error');
+        }
+    };
+
+    // 3. ÇOK SAYFALI SEZON SONU RAPORU (ANA TABLO + HER BİR TANKER İÇİN AYRI WORKSHEET SAYFASI)
+    const exportMultiSheetEndSeasonReport = () => {
+        try {
+            if (!filteredEndSeasonTankers || filteredEndSeasonTankers.length === 0) {
+                showMessage('Rapor oluşturulacak tanker kaydı bulunamadı.', 'error');
+                return;
+            }
+
+            showMessage(`${filteredEndSeasonTankers.length} tanker için çok sayfalı detaylı Excel raporu hazırlanıyor...`, 'info');
+
+            let xml = `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">
+ <DocumentProperties xmlns="urn:schemas-microsoft-com:office:office">
+  <Author>Orman Genel Müdürlüğü</Author>
+  <Created>${new Date().toISOString()}</Created>
+ </DocumentProperties>
+ <Styles>
+  <Style ss:ID="Default" ss:Name="Normal">
+   <Alignment ss:Vertical="Center"/>
+   <Borders/>
+   <Font ss:FontName="Calibri" ss:Size="10" ss:Color="#000000"/>
+   <Interior/>
+   <NumberFormat/>
+   <Protection/>
+  </Style>
+  <Style ss:ID="HeaderTitle">
+   <Alignment ss:Horizontal="Left" ss:Vertical="Center"/>
+   <Font ss:FontName="Calibri" ss:Size="13" ss:Color="#14532D" ss:Bold="1"/>
+  </Style>
+  <Style ss:ID="HeaderSub">
+   <Alignment ss:Horizontal="Left" ss:Vertical="Center"/>
+   <Font ss:FontName="Calibri" ss:Size="10" ss:Color="#475569" ss:Italic="1"/>
+  </Style>
+  <Style ss:ID="SectionHeader">
+   <Alignment ss:Horizontal="Left" ss:Vertical="Center"/>
+   <Borders>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#14532D"/>
+   </Borders>
+   <Font ss:FontName="Calibri" ss:Size="11" ss:Color="#14532D" ss:Bold="1"/>
+  </Style>
+  <Style ss:ID="ColHeader">
+   <Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/>
+   <Borders>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#94A3B8"/>
+    <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#94A3B8"/>
+    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#94A3B8"/>
+    <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#94A3B8"/>
+   </Borders>
+   <Font ss:FontName="Calibri" ss:Size="10" ss:Color="#FFFFFF" ss:Bold="1"/>
+   <Interior ss:Color="#14532D" ss:Pattern="Solid"/>
+  </Style>
+  <Style ss:ID="DataCell">
+   <Alignment ss:Horizontal="Left" ss:Vertical="Center"/>
+   <Borders>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+    <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+    <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+   </Borders>
+  </Style>
+  <Style ss:ID="DataCellCenter">
+   <Alignment ss:Horizontal="Center" ss:Vertical="Center"/>
+   <Borders>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+    <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+    <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+   </Borders>
+  </Style>
+  <Style ss:ID="DataCellNumber">
+   <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
+   <Borders>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+    <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+    <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/>
+   </Borders>
+   <NumberFormat ss:Format="#,##0.00"/>
+  </Style>
+  <Style ss:ID="TotalCell">
+   <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
+   <Borders>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#94A3B8"/>
+    <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#94A3B8"/>
+    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#94A3B8"/>
+    <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#94A3B8"/>
+   </Borders>
+   <Font ss:FontName="Calibri" ss:Size="10" ss:Color="#0F172A" ss:Bold="1"/>
+   <Interior ss:Color="#F1F5F9" ss:Pattern="Solid"/>
+   <NumberFormat ss:Format="#,##0.00"/>
+  </Style>
+  <Style ss:ID="TotalLabel">
+   <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
+   <Borders>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#94A3B8"/>
+    <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#94A3B8"/>
+    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#94A3B8"/>
+    <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#94A3B8"/>
+   </Borders>
+   <Font ss:FontName="Calibri" ss:Size="10" ss:Color="#0F172A" ss:Bold="1"/>
+   <Interior ss:Color="#F1F5F9" ss:Pattern="Solid"/>
+  </Style>
+ </Styles>
+`;
+
+            // SAYFA 1: ANA TABLO
+            xml += ` <Worksheet ss:Name="Ana Tablo">
+  <Table>
+`;
+            xml += `   <Column ss:Width="45"/>
+`;
+            xml += `   <Column ss:Width="110"/>
+`;
+            xml += `   <Column ss:Width="105"/>
+`;
+            xml += `   <Column ss:Width="85"/>
+`;
+            xml += `   <Column ss:Width="125"/>
+`;
+            xml += `   <Column ss:Width="145"/>
+`;
+            xml += `   <Column ss:Width="135"/>
+`;
+            xml += `   <Column ss:Width="125"/>
+`;
+            xml += `   <Column ss:Width="120"/>
+`;
+            xml += `   <Column ss:Width="110"/>
+`;
+            xml += `   <Column ss:Width="120"/>
+`;
+
+            xml += `   <Row ss:Height="26">
+    <Cell ss:StyleID="HeaderTitle"><Data ss:Type="String">ORMAN GENEL MÜDÜRLÜĞÜ - SEZON SONU TANKER YAKIT AKTARIMI &amp; BAKİYE RAPORU</Data></Cell>
+   </Row>
+`;
+            xml += `   <Row ss:Height="18">
+    <Cell ss:StyleID="HeaderSub"><Data ss:Type="String">Rapor Tarihi: ${new Date().toLocaleString('tr-TR')} | Toplam Tanker: ${filteredEndSeasonTankers.length}</Data></Cell>
+   </Row>
+`;
+            xml += `   <Row ss:Height="10"/>
+`;
+
+            const mainHeaders = [
+                'Sıra No',
+                'Tanker Plakası',
+                'Firma Bilgisi',
+                'Kapasite (lt)',
+                'Toplam Giren Yakıt (lt)',
+                'Toplam Çıkan Yakıt (Tankerden Tankere Transfer) (lt)',
+                'Toplam Çıkan Yakıt (Hava Aracı) (lt)',
+                'Toplam Çıkan Atık & Test (lt)',
+                'Tanker Mevcut Kalan (lt)',
+                'Reel Kalan Yakıt (lt)',
+                'Fark (Reel - Mevcut) (lt)'
+            ];
+
+            xml += `   <Row ss:Height="28">
+`;
+            mainHeaders.forEach(h => {
+                xml += `    <Cell ss:StyleID="ColHeader"><Data ss:Type="String">${escapeXml(h)}</Data></Cell>
+`;
+            });
+            xml += `   </Row>
+`;
+
+            filteredEndSeasonTankers.forEach((t, idx) => {
+                const reelRaw = reelKalanValues[t.plate];
+                let reelNum = null;
+                let diffNum = null;
+                if (reelRaw !== undefined && reelRaw !== null && String(reelRaw).trim() !== '') {
+                    const p = parseFloat(String(reelRaw).replace(',', '.'));
+                    if (!isNaN(p)) {
+                        reelNum = p;
+                        diffNum = p - t.remaining;
+                    }
+                }
+
+                xml += `   <Row ss:Height="20">
+`;
+                xml += `    <Cell ss:StyleID="DataCellCenter"><Data ss:Type="Number">${idx + 1}</Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="DataCellCenter"><Data ss:Type="String">${escapeXml(t.plate)}</Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="DataCell"><Data ss:Type="String">${escapeXml(t.company || 'OGM')}</Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="DataCellNumber"><Data ss:Type="Number">${t.capacity || 0}</Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="DataCellNumber"><Data ss:Type="Number">${t.totalIn || 0}</Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="DataCellNumber"><Data ss:Type="Number">${t.totalTransferOut || 0}</Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="DataCellNumber"><Data ss:Type="Number">${t.totalOutAircraft || 0}</Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="DataCellNumber"><Data ss:Type="Number">${t.totalWasteTest || 0}</Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="DataCellNumber"><Data ss:Type="Number">${t.remaining || 0}</Data></Cell>
+`;
+                if (reelNum !== null) {
+                    xml += `    <Cell ss:StyleID="DataCellNumber"><Data ss:Type="Number">${reelNum}</Data></Cell>
+`;
+                } else {
+                    xml += `    <Cell ss:StyleID="DataCellCenter"><Data ss:Type="String">-</Data></Cell>
+`;
+                }
+                if (diffNum !== null) {
+                    xml += `    <Cell ss:StyleID="DataCellNumber"><Data ss:Type="Number">${diffNum}</Data></Cell>
+`;
+                } else {
+                    xml += `    <Cell ss:StyleID="DataCellCenter"><Data ss:Type="String">-</Data></Cell>
+`;
+                }
+                xml += `   </Row>
+`;
+            });
+
+            // Genel Toplam Satırı
+            xml += `   <Row ss:Height="24">
+`;
+            xml += `    <Cell ss:StyleID="TotalLabel"><Data ss:Type="String">GENEL TOPLAM:</Data></Cell>
+`;
+            xml += `    <Cell ss:StyleID="TotalLabel"><Data ss:Type="String"></Data></Cell>
+`;
+            xml += `    <Cell ss:StyleID="TotalLabel"><Data ss:Type="String"></Data></Cell>
+`;
+            xml += `    <Cell ss:StyleID="TotalCell"><Data ss:Type="Number">${endSeasonTotals.cap || 0}</Data></Cell>
+`;
+            xml += `    <Cell ss:StyleID="TotalCell"><Data ss:Type="Number">${endSeasonTotals.inVol || 0}</Data></Cell>
+`;
+            xml += `    <Cell ss:StyleID="TotalCell"><Data ss:Type="Number">${endSeasonTotals.outTransfer || 0}</Data></Cell>
+`;
+            xml += `    <Cell ss:StyleID="TotalCell"><Data ss:Type="Number">${endSeasonTotals.outAir || 0}</Data></Cell>
+`;
+            xml += `    <Cell ss:StyleID="TotalCell"><Data ss:Type="Number">${endSeasonTotals.outWaste || 0}</Data></Cell>
+`;
+            xml += `    <Cell ss:StyleID="TotalCell"><Data ss:Type="Number">${endSeasonTotals.rem || 0}</Data></Cell>
+`;
+            if (endSeasonTotals.hasAnyReel) {
+                xml += `    <Cell ss:StyleID="TotalCell"><Data ss:Type="Number">${endSeasonTotals.reel || 0}</Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="TotalCell"><Data ss:Type="Number">${endSeasonTotals.diff || 0}</Data></Cell>
+`;
+            } else {
+                xml += `    <Cell ss:StyleID="TotalLabel"><Data ss:Type="String">-</Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="TotalLabel"><Data ss:Type="String">-</Data></Cell>
+`;
+            }
+            xml += `   </Row>
+`;
+            xml += `  </Table>
+ </Worksheet>
+`;
+
+            // SAYFA 2+: HER BİR TANKER İÇİN AYRI WORKSHEET
+            const usedNames = new Set(["Ana Tablo"]);
+            filteredEndSeasonTankers.forEach(t => {
+                let sheetName = String(t.plate || 'Tanker').replace(/[:\\/?*\[\]]/g, '_').substring(0, 31);
+                if (usedNames.has(sheetName)) {
+                    sheetName = (sheetName.substring(0, 27) + "_" + Math.floor(Math.random() * 900 + 100));
+                }
+                usedNames.add(sheetName);
+
+                const reelRaw = reelKalanValues[t.plate];
+                let reelNum = '-';
+                let diffNum = '-';
+                let diffDesc = '-';
+                if (reelRaw !== undefined && reelRaw !== null && String(reelRaw).trim() !== '') {
+                    const parsed = parseFloat(String(reelRaw).replace(',', '.'));
+                    if (!isNaN(parsed)) {
+                        reelNum = parsed;
+                        const d = parsed - t.remaining;
+                        diffNum = d;
+                        diffDesc = d > 0 ? 'Fazlalık' : d < 0 ? 'Eksiklik' : 'Eşit';
+                    }
+                }
+
+                xml += ` <Worksheet ss:Name="${escapeXml(sheetName)}">
+  <Table>
+`;
+                xml += `   <Column ss:Width="50"/>
+`;
+                xml += `   <Column ss:Width="95"/>
+`;
+                xml += `   <Column ss:Width="110"/>
+`;
+                xml += `   <Column ss:Width="100"/>
+`;
+                xml += `   <Column ss:Width="70"/>
+`;
+                xml += `   <Column ss:Width="120"/>
+`;
+                xml += `   <Column ss:Width="170"/>
+`;
+                xml += `   <Column ss:Width="110"/>
+`;
+                xml += `   <Column ss:Width="110"/>
+`;
+                xml += `   <Column ss:Width="120"/>
+`;
+                xml += `   <Column ss:Width="130"/>
+`;
+                xml += `   <Column ss:Width="110"/>
+`;
+
+                // Title Banner
+                xml += `   <Row ss:Height="24">
+    <Cell ss:StyleID="HeaderTitle"><Data ss:Type="String">${escapeXml(t.plate)} - TANKER SEZON SONU YAKIT VE BAKİYE DETAY RAPORU</Data></Cell>
+   </Row>
+`;
+                xml += `   <Row ss:Height="18">
+    <Cell ss:StyleID="HeaderSub"><Data ss:Type="String">Firma: ${escapeXml(t.company || 'OGM')} | Kapasite: ${t.capacity || 0} lt | Bölge: ${escapeXml(t.region || '-')} | Tarih: ${new Date().toLocaleString('tr-TR')}</Data></Cell>
+   </Row>
+`;
+                xml += `   <Row ss:Height="10"/>
+`;
+
+                // Section 1: Özet Bakiye
+                xml += `   <Row ss:Height="20">
+    <Cell ss:StyleID="SectionHeader"><Data ss:Type="String">1. GİREN, ÇIKAN, MEVCUT VE REEL BAKİYE ÖZETİ</Data></Cell>
+   </Row>
+`;
+                xml += `   <Row ss:Height="24">
+    <Cell ss:StyleID="ColHeader"><Data ss:Type="String">Kalem / Hareket Açıklaması</Data></Cell><Cell ss:StyleID="ColHeader"><Data ss:Type="String">Miktar (lt)</Data></Cell><Cell ss:StyleID="ColHeader"><Data ss:Type="String">Kayıt Adedi</Data></Cell><Cell ss:StyleID="ColHeader"><Data ss:Type="String">Açıklama / Durum</Data></Cell>
+   </Row>
+`;
+
+                const summaryItems = [
+                    ['TOPLAM GİREN YAKIT (Dolum & Transfer Girişi)', t.totalIn || 0, (t.incomingDetails || []).length, 'Meydan dolumları ve transfer girişleri'],
+                    ['DİĞER TANKERLERE TRANSFER ÇIKIŞI', t.totalTransferOut || 0, (t.transferOutDetails || []).length, 'Bu tankerden başka tankerlere verilen yakıt'],
+                    ['HAVA ARACI İKMAL & TEST BAKIM ÇIKIŞI', t.totalOutAircraft || 0, (t.aircraftOutDetails || []).length, 'Hava araçlarına yapılan yakıt ikmalleri'],
+                    ['ATIK YAKIT VE ŞOFÖR TESTLERİ ÇIKIŞI', t.totalWasteTest || 0, (t.wasteTestDetails || []).length, 'Atık yakıt ve şoför kontrolleri'],
+                    ['TANKER MEVCUT KALAN (Sistem Bakiyesi)', t.remaining || 0, (t.allMovements || []).length, 'Sistemdeki net bakiye (Giren - Çıkanlar)'],
+                    ['REEL KALAN YAKIT (Sahada Ölçülen Fiziksel)', reelNum, '-', 'Sahadan girilen fiziksel ölçüm değeri'],
+                    ['FARK (Reel Kalan - Sistem Bakiyesi)', diffNum, '-', diffDesc]
+                ];
+
+                summaryItems.forEach(([label, amt, count, desc]) => {
+                    const isNum = typeof amt === 'number';
+                    xml += `   <Row ss:Height="20">
+`;
+                    xml += `    <Cell ss:StyleID="DataCell"><Data ss:Type="String">${escapeXml(label)}</Data></Cell>
+`;
+                    if (isNum) {
+                        xml += `    <Cell ss:StyleID="DataCellNumber"><Data ss:Type="Number">${amt}</Data></Cell>
+`;
+                    } else {
+                        xml += `    <Cell ss:StyleID="DataCellCenter"><Data ss:Type="String">${escapeXml(amt)}</Data></Cell>
+`;
+                    }
+                    xml += `    <Cell ss:StyleID="DataCellCenter"><Data ss:Type="String">${escapeXml(count)}</Data></Cell>
+`;
+                    xml += `    <Cell ss:StyleID="DataCell"><Data ss:Type="String">${escapeXml(desc)}</Data></Cell>
+`;
+                    xml += `   </Row>
+`;
+                });
+
+                xml += `   <Row ss:Height="14"/>
+`;
+
+                // Section 2: Tüm Hareketler ve Yürüyen Bakiye (Kronolojik)
+                xml += `   <Row ss:Height="20">
+    <Cell ss:StyleID="SectionHeader"><Data ss:Type="String">2. TÜM HAREKETLER VE YÜRÜYEN BAKİYE TABLOSU (KRONOLOJİK)</Data></Cell>
+   </Row>
+`;
+                const movHeaders = ['Sıra No', 'Tarih', 'Kayıt No', 'Makbuz No', 'Yön', 'Hareket Türü', 'Kaynak / Hedef / Detay', 'Giren (lt)', 'Çıkan (lt)', 'Yürüyen Bakiye (lt)', 'Personel', 'Konum'];
+                xml += `   <Row ss:Height="26">
+`;
+                movHeaders.forEach(h => {
+                    xml += `    <Cell ss:StyleID="ColHeader"><Data ss:Type="String">${escapeXml(h)}</Data></Cell>
+`;
+                });
+                xml += `   </Row>
+`;
+
+                const sortedMovements = [...(t.allMovements || [])].sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+                let runningBal = 0;
+                sortedMovements.forEach((it, mIdx) => {
+                    const amt = it.fuelAmountNum || parseFloat(String(it.fuelAmount).replace(',', '.')) || 0;
+                    const isEntry = it.movementType === 'GİRİŞ';
+                    if (isEntry) runningBal += amt; else runningBal -= amt;
+
+                    xml += `   <Row ss:Height="19">
+`;
+                    xml += `    <Cell ss:StyleID="DataCellCenter"><Data ss:Type="Number">${mIdx + 1}</Data></Cell>
+`;
+                    xml += `    <Cell ss:StyleID="DataCellCenter"><Data ss:Type="String">${escapeXml(it.date ? String(it.date).slice(0, 10) : '-')}</Data></Cell>
+`;
+                    xml += `    <Cell ss:StyleID="DataCellCenter"><Data ss:Type="String">${escapeXml(it.kayitNumarasi || it.id || '-')}</Data></Cell>
+`;
+                    xml += `    <Cell ss:StyleID="DataCellCenter"><Data ss:Type="String">${escapeXml(it.receiptNumber || '-')}</Data></Cell>
+`;
+                    xml += `    <Cell ss:StyleID="DataCellCenter"><Data ss:Type="String">${isEntry ? 'GİRİŞ' : 'ÇIKIŞ'}</Data></Cell>
+`;
+                    xml += `    <Cell ss:StyleID="DataCell"><Data ss:Type="String">${escapeXml(it.subType || it.receiptType || '-')}</Data></Cell>
+`;
+                    xml += `    <Cell ss:StyleID="DataCell"><Data ss:Type="String">${escapeXml(it.detailDesc || it.tailNumber || it.location || '-')}</Data></Cell>
+`;
+                    if (isEntry) {
+                        xml += `    <Cell ss:StyleID="DataCellNumber"><Data ss:Type="Number">${amt}</Data></Cell>
+`;
+                        xml += `    <Cell ss:StyleID="DataCellCenter"><Data ss:Type="String"></Data></Cell>
+`;
+                    } else {
+                        xml += `    <Cell ss:StyleID="DataCellCenter"><Data ss:Type="String"></Data></Cell>
+`;
+                        xml += `    <Cell ss:StyleID="DataCellNumber"><Data ss:Type="Number">${amt}</Data></Cell>
+`;
+                    }
+                    xml += `    <Cell ss:StyleID="DataCellNumber"><Data ss:Type="Number">${runningBal}</Data></Cell>
+`;
+                    xml += `    <Cell ss:StyleID="DataCell"><Data ss:Type="String">${escapeXml(it.personnelName || '-')}</Data></Cell>
+`;
+                    xml += `    <Cell ss:StyleID="DataCell"><Data ss:Type="String">${escapeXml(it.location || '-')}</Data></Cell>
+`;
+                    xml += `   </Row>
+`;
+                });
+
+                // Toplam Satırı
+                xml += `   <Row ss:Height="22">
+`;
+                xml += `    <Cell ss:StyleID="TotalLabel"><Data ss:Type="String">TOPLAM:</Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="TotalLabel"><Data ss:Type="String"></Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="TotalLabel"><Data ss:Type="String"></Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="TotalLabel"><Data ss:Type="String"></Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="TotalLabel"><Data ss:Type="String"></Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="TotalLabel"><Data ss:Type="String"></Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="TotalLabel"><Data ss:Type="String"></Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="TotalCell"><Data ss:Type="Number">${t.totalIn || 0}</Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="TotalCell"><Data ss:Type="Number">${(t.totalOutAircraft || 0) + (t.totalWasteTest || 0) + (t.totalTransferOut || 0)}</Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="TotalCell"><Data ss:Type="Number">${t.remaining || 0}</Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="TotalLabel"><Data ss:Type="String"></Data></Cell>
+`;
+                xml += `    <Cell ss:StyleID="TotalLabel"><Data ss:Type="String"></Data></Cell>
+`;
+                xml += `   </Row>
+`;
+
+                xml += `  </Table>
+ </Worksheet>
+`;
+            });
+
+            xml += `</Workbook>`;
+
+            const blob = new Blob([xml], { type: 'application/vnd.ms-excel' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            const dateStr = new Date().toISOString().slice(0, 10);
+            link.download = `SEZON_SONU_TANKER_YAKIT_AKTARIMI_VE_BAKIYE_RAPORU_${dateStr}.xls`;
+            link.click();
+            URL.revokeObjectURL(url);
+            showMessage(`Ana tablo ve ${filteredEndSeasonTankers.length} tankere ait ayrı sayfalar Excel (.xls) olarak başarıyla indirildi.`, 'success');
+        } catch (err) {
+            console.error('Multi-sheet Excel export error:', err);
+            showMessage('Çok sayfalı Excel indirme sırasında hata oluştu: ' + err.message, 'error');
+        }
+    };
+
+    // 4. DETAY POPUP İÇİNDEKİ EXCEL İNDİR (Web HTML Excel - Yeşil Başlıklı)
+    const exportEndSeasonDetailToExcel = () => {
+        if (!endSeasonDetailModal || !endSeasonDetailModal.items || endSeasonDetailModal.items.length === 0) {
+            showMessage('İndirilecek detay kaydı bulunamadı.', 'error');
+            return;
+        }
+        try {
+            const cleanPlate = (endSeasonDetailModal.tanker?.plate || 'Tanker').replace(/[^a-zA-Z0-9]/g, '_');
+            const dateStr = new Date().toISOString().slice(0, 10);
+            const formatNum = (num) => {
+                if (num === undefined || num === null || isNaN(num)) return '0,00';
+                return Number(num).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            };
+
+            let sumAmount = 0;
+            const itemsHtml = endSeasonDetailModal.items.map((it, idx) => {
+                const amount = it.fuelAmountNum || parseFloat(String(it.fuelAmount).replace(',', '.')) || 0;
+                sumAmount += amount;
+                const isOut = it.movementType === 'ÇIKIŞ';
+                return `
+                <tr>
+                    <td class="text-center">${idx + 1}</td>
+                    <td>${it.date ? formatDisplayDateOnly(it.date) : '-'}</td>
+                    <td>${escapeHtml(it.kayitNumarasi ? formatDisplayDate(it.kayitNumarasi) : (it.id || '-'))}</td>
+                    <td><strong>${escapeHtml(it.receiptNumber || '-')}</strong></td>
+                    <td class="text-center"><strong style="color: ${isOut ? '#b91c1c' : '#15803d'};">${escapeHtml(it.movementType || it.subType || (it.recordType === 'tankerDolum' ? 'GİRİŞ' : 'ÇIKIŞ'))}</strong></td>
+                    <td>${escapeHtml(it.detailDesc || it.tailNumber || it.location || '-')}</td>
+                    <td>${escapeHtml(it.receiptType || '-')}</td>
+                    <td class="text-right"><strong>${isOut ? '-' : '+'}${formatNum(amount)} lt</strong></td>
+                    <td>${escapeHtml(it.personnelName || '-')}</td>
+                    <td>${escapeHtml(it.jobTitle || '-')}</td>
+                    <td>${escapeHtml(it.location || '-')}</td>
+                </tr>`;
+            }).join('');
+
+            let html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta http-equiv="content-type" content="application/vnd.ms-excel; charset=UTF-8">
+<style>
+    body { font-family: Calibri, 'Segoe UI', Arial, sans-serif; font-size: 11px; margin: 15px; color: #0f172a; }
+    h2 { color: #14532d; font-family: Calibri, Arial, sans-serif; font-size: 16px; margin: 0 0 4px 0; font-weight: bold; }
+    .info-bar { margin-bottom: 12px; font-size: 11px; color: #334155; }
+    table { border-collapse: collapse; width: 100%; font-family: Calibri, Arial, sans-serif; }
+    th { background-color: #14532d !important; color: #ffffff !important; border: 1px solid #94a3b8; font-weight: bold; padding: 7px 10px; font-size: 11px; text-align: left; }
+    th.text-center { text-align: center; }
+    th.text-right { text-align: right; }
+    td { border: 1px solid #cbd5e1; padding: 5px 8px; font-size: 11px; color: #0f172a; }
+    td.text-center { text-align: center; }
+    td.text-right { text-align: right; }
+    tr:nth-child(even) td { background-color: #f8fafc; }
+    tr.total-row td { background-color: #f1f5f9; font-weight: bold; border-top: 2px solid #94a3b8; border-bottom: 2px solid #94a3b8; color: #0f172a; }
+</style>
+</head>
+<body>
+    <h2>${escapeHtml(endSeasonDetailModal.title || 'Tanker Detay Dağılımı')}</h2>
+    <div class="info-bar">
+        <strong>Tanker:</strong> ${escapeHtml(endSeasonDetailModal.tanker?.plate || '-')} &nbsp;|&nbsp; 
+        <strong>Firma:</strong> ${escapeHtml(endSeasonDetailModal.tanker?.company || 'OGM')} &nbsp;|&nbsp; 
+        <strong>Kayıt Sayısı:</strong> ${endSeasonDetailModal.items.length} &nbsp;|&nbsp; 
+        <strong>Rapor Tarihi:</strong> ${new Date().toLocaleString('tr-TR')}
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th class="text-center" style="width: 45px;">#</th>
+                <th style="width: 90px;">Tarih</th>
+                <th style="width: 120px;">Kayıt No</th>
+                <th style="width: 100px;">Makbuz No</th>
+                <th class="text-center" style="width: 100px;">İşlem / Yön</th>
+                <th>Hava Aracı / Meydan / Transfer Detayı</th>
+                <th>Makbuz Tipi</th>
+                <th class="text-right" style="width: 130px;">Yakıt Miktarı (lt)</th>
+                <th>Personel / Yetkili</th>
+                <th>Meslek</th>
+                <th>Konum</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${itemsHtml}
+            <tr class="total-row">
+                <td colspan="7" class="text-right">TOPLAM:</td>
+                <td class="text-right"><strong>${formatNum(sumAmount)} lt</strong></td>
+                <td colspan="3"></td>
+            </tr>
+        </tbody>
+    </table>
+</body>
+</html>`;
+
+            const blob = new Blob(['\ufeff', html], { type: 'application/vnd.ms-excel' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `${cleanPlate}_${endSeasonDetailModal.type}_Detay_${dateStr}.xls`;
+            link.click();
+            URL.revokeObjectURL(url);
+            showMessage('Detay tablosu Excel (.xls) olarak başarıyla indirildi.', 'success');
+        } catch (err) {
+            console.error('Detail excel export error:', err);
+            showMessage('Excel indirme sırasında hata oluştu: ' + err.message, 'error');
+        }
+    };
+
+    const handleEndSeasonReport = () => {
+        setIsEndSeasonModalOpen(true);
     };
 
     const handleRowDoubleClick = (record, e) => {
@@ -3646,6 +5157,12 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, onUpda
                             React.createElement("path", { fillRule: "evenodd", d: "M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z", clipRule: "evenodd" })
                         ),
                         "Dolum Tanker Transferlerini Takip Et"
+                     ),
+                     React.createElement("button", { 
+                        onClick: handleEndSeasonReport, 
+                        className: `py-2 px-6 text-white rounded-lg font-semibold transition-all duration-300 bg-rose-600 hover:bg-rose-700 flex items-center justify-center gap-2` 
+                     }, 
+                        "SEZON SONU TANKER YAKIT AKTAR"
                      )
                 )
             ),
@@ -3967,10 +5484,749 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, onUpda
                         )
                     )
                 )
+            ),
+
+            // SEZON SONU TANKER YAKIT AKTARIMI & BAKİYE RAPORU MODAL
+            React.createElement(Modal, {
+                isOpen: isEndSeasonModalOpen,
+                onClose: () => setIsEndSeasonModalOpen(false),
+                title: "SEZON SONU TANKER YAKIT AKTARIMI & BAKİYE RAPORU",
+                maxWidth: "1450px"
+            },
+                React.createElement("div", { className: "space-y-4 py-1" },
+                    // Top Controls Toolbar (Kapsam/Firma kaldırıldı, her başlığa inline filtre eklendi)
+                    React.createElement("div", { className: "flex flex-col lg:flex-row lg:items-center justify-between gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl" },
+                        React.createElement("div", { className: "flex flex-wrap items-center gap-3" },
+                            // Checkbox: Sadece bakiyesi / hareketi olanlar
+                            React.createElement("div", { className: "flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-lg shadow-sm" },
+                                React.createElement("input", {
+                                    type: "checkbox",
+                                    id: "cbEndSeasonBalance",
+                                    checked: endSeasonOnlyWithBalance,
+                                    onChange: (e) => setEndSeasonOnlyWithBalance(e.target.checked),
+                                    className: "h-4 w-4 text-ogm-green-600 rounded border-slate-300 cursor-pointer"
+                                }),
+                                React.createElement("label", { htmlFor: "cbEndSeasonBalance", className: "text-xs font-semibold text-slate-700 cursor-pointer select-none" }, "Sadece Hareketi/Bakiyesi Olan Tankerler")
+                            ),
+                            // Tanker Count Badge
+                            React.createElement("div", { className: "px-3 py-1.5 bg-slate-200/80 text-slate-700 rounded-lg text-xs font-bold font-mono" },
+                                `${filteredEndSeasonTankers.length} / ${endSeasonTankerList.length} Tanker Gösteriliyor`
+                            ),
+                            // Filter reset button if any header filter active
+                            hasActiveColumnFilters && React.createElement("button", {
+                                type: "button",
+                                onClick: resetAllColumnFilters,
+                                className: "px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                            },
+                                React.createElement("span", null, "✕"),
+                                "Başlık Filtrelerini Temizle"
+                            )
+                        ),
+                        // Action buttons
+                        React.createElement("div", { className: "flex items-center gap-2 pt-2 lg:pt-0" },
+                            React.createElement("button", {
+                                type: "button",
+                                onClick: () => {
+                                    if (window.confirm("Girilmiş olan tüm reel kalan yakıt verileri temizlensin mi?")) {
+                                        setReelKalanValues({});
+                                        localStorage.removeItem('ogm_sezon_sonu_reel_kalan');
+                                        showMessage("Reel kalan verileri temizlendi.", "info");
+                                    }
+                                },
+                                className: "py-2 px-3 text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                            }, "Reel Kalanları Temizle"),
+                            React.createElement("button", {
+                                type: "button",
+                                onClick: exportEndSeasonSummaryToExcel,
+                                title: "Görüntülenen ana tabloyu yeşil başlıklı web html excel formatında indirir",
+                                className: "py-2 px-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-2 shadow-md transition-all hover:scale-[1.02] cursor-pointer"
+                            },
+                                React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
+                                    React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" })
+                                ),
+                                "Tüm Tabloyu Excel Olarak İndir (.xls)"
+                            ),
+                            React.createElement("button", {
+                                type: "button",
+                                onClick: exportMultiSheetEndSeasonReport,
+                                title: "Filtrelenen/Seçilen tüm tankerlerin detaylı hareketlerini ve ana tabloyu içeren çok sayfalı Excel raporunu hazırlar",
+                                className: "py-2 px-4 bg-gradient-to-r from-teal-700 to-emerald-700 hover:from-teal-800 hover:to-emerald-800 text-white rounded-lg text-xs font-bold flex items-center gap-2 shadow-md transition-all hover:scale-[1.02] cursor-pointer border border-emerald-600"
+                            },
+                                React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
+                                    React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" })
+                                ),
+                                "Tankerleri Excele Boşalt (Ana Tablo + Her Tankere Ayrı Sayfa)"
+                            )
+                        )
+                    ),
+                    // Quick guidance banner
+                    React.createElement("div", { className: "p-3 bg-amber-50/90 border border-amber-200/80 rounded-xl text-xs text-amber-900 flex items-start gap-2.5 shadow-sm" },
+                        React.createElement("span", { className: "text-base leading-none select-none" }, "💡"),
+                        React.createElement("div", { className: "leading-relaxed" },
+                            React.createElement("strong", { className: "font-bold text-amber-950" }, "Nasıl Kullanılır: "),
+                            "Her sütun başlığındaki filtre kutularından anlık filtreleme yapabilirsiniz. 'Tankerleri Excele Boşalt' butonu ile ana tablo ve her tankerin ayrı sayfada yer aldığı çok sayfalı Excel raporunu indirebilir; her satırdaki ",
+                            React.createElement("span", { className: "font-semibold underline text-emerald-800" }, "Detay Excel İndir"),
+                            " butonu ile tankere ait tüm Giren, Çıkan, Mevcut ve Reel bakiye tablosunu tek Excel olarak indirebilirsiniz."
+                        )
+                    ),
+                    // Metrics Cards Banner
+                    React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3" },
+                        React.createElement("div", { className: "bg-slate-100 p-3 rounded-xl border border-slate-200" },
+                            React.createElement("p", { className: "text-[10px] font-bold text-slate-500 uppercase tracking-wider" }, "Tanker Sayısı"),
+                            React.createElement("p", { className: "text-lg font-black text-slate-800 mt-1" }, filteredEndSeasonTankers.length)
+                        ),
+                        React.createElement("div", { className: "bg-blue-50 p-3 rounded-xl border border-blue-200" },
+                            React.createElement("p", { className: "text-[10px] font-bold text-blue-600 uppercase tracking-wider" }, "Toplam Giren"),
+                            React.createElement("p", { className: "text-lg font-black text-blue-900 mt-1" }, endSeasonTotals.inVol.toLocaleString('tr-TR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }), " lt")
+                        ),
+                        React.createElement("div", { className: "bg-cyan-50 p-3 rounded-xl border border-cyan-200" },
+                            React.createElement("p", { className: "text-[10px] font-bold text-cyan-700 uppercase tracking-wider" }, "Çıkan (Transfer)"),
+                            React.createElement("p", { className: "text-lg font-black text-cyan-950 mt-1" }, endSeasonTotals.outTransfer.toLocaleString('tr-TR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }), " lt")
+                        ),
+                        React.createElement("div", { className: "bg-emerald-50 p-3 rounded-xl border border-emerald-200" },
+                            React.createElement("p", { className: "text-[10px] font-bold text-emerald-700 uppercase tracking-wider" }, "Çıkan (Hava Aracı)"),
+                            React.createElement("p", { className: "text-lg font-black text-emerald-950 mt-1" }, endSeasonTotals.outAir.toLocaleString('tr-TR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }), " lt")
+                        ),
+                        React.createElement("div", { className: "bg-amber-50 p-3 rounded-xl border border-amber-200" },
+                            React.createElement("p", { className: "text-[10px] font-bold text-amber-700 uppercase tracking-wider" }, "Çıkan (Atık & Test)"),
+                            React.createElement("p", { className: "text-lg font-black text-amber-950 mt-1" }, endSeasonTotals.outWaste.toLocaleString('tr-TR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }), " lt")
+                        ),
+                        React.createElement("div", { className: "bg-indigo-50 p-3 rounded-xl border border-indigo-200" },
+                            React.createElement("p", { className: "text-[10px] font-bold text-indigo-700 uppercase tracking-wider" }, "Mevcut Kalan"),
+                            React.createElement("p", { className: "text-lg font-black text-indigo-950 mt-1" }, endSeasonTotals.rem.toLocaleString('tr-TR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }), " lt")
+                        ),
+                        React.createElement("div", { className: "bg-purple-50 p-3 rounded-xl border border-purple-200" },
+                            React.createElement("p", { className: "text-[10px] font-bold text-purple-700 uppercase tracking-wider" }, "Reel Kalan (Girilen)"),
+                            React.createElement("p", { className: "text-lg font-black text-purple-950 mt-1" }, endSeasonTotals.hasAnyReel ? `${endSeasonTotals.reel.toLocaleString('tr-TR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} lt` : '--')
+                        )
+                    ),
+                    // Main 10-Column Table With Header Filters and Without Numbers
+                    React.createElement("div", { className: "overflow-x-auto border border-slate-200 rounded-xl shadow-sm max-h-[520px] overflow-y-auto" },
+                        React.createElement("table", { id: "sezon-sonu-tanker-table-dom", className: "w-full text-xs text-left divide-y divide-slate-200" },
+                            React.createElement("thead", { className: "bg-slate-800 text-white font-bold sticky top-0 z-10 shadow" },
+                                // Row 1: Column Titles (No numbers)
+                                React.createElement("tr", null,
+                                    React.createElement("th", { className: "p-2.5 text-center w-12" }, "Sıra"),
+                                    React.createElement("th", { className: "p-2.5 text-left min-w-[130px]" }, "Tanker Plakası"),
+                                    React.createElement("th", { className: "p-2.5 text-left min-w-[110px]" }, "Firma Bilgisi"),
+                                    React.createElement("th", { className: "p-2.5 text-right min-w-[90px]" }, "Kapasite (lt)"),
+                                    React.createElement("th", { className: "p-2.5 text-right cursor-help min-w-[135px]", title: "Detay dağılımını görmek için rakama tıklayın" }, "Toplam Giren Yakıt (lt) 🔍"),
+                                    React.createElement("th", { className: "p-2.5 text-right cursor-help min-w-[155px]", title: "Detay dağılımını görmek için rakama tıklayın" }, "Toplam Çıkan Yakıt (Tankerden Tankere Transfer) (lt) 🔍"),
+                                    React.createElement("th", { className: "p-2.5 text-right cursor-help min-w-[145px]", title: "Detay dağılımını görmek için rakama tıklayın" }, "Toplam Çıkan Yakıt (Hava Aracı) (lt) 🔍"),
+                                    React.createElement("th", { className: "p-2.5 text-right cursor-help min-w-[135px]", title: "Detay dağılımını görmek için rakama tıklayın" }, "Toplam Çıkan Atık & Test (lt) 🔍"),
+                                    React.createElement("th", { className: "p-2.5 text-right cursor-help min-w-[125px]", title: "Bakiye dökümünü görmek için rakama tıklayın" }, "Tanker Mevcut Kalan (lt) 🔍"),
+                                    React.createElement("th", { className: "p-2.5 text-right w-36" }, "Reel Kalan Yakıt (lt)"),
+                                    React.createElement("th", { className: "p-2.5 text-center min-w-[140px]" }, "Detay Excel İndir")
+                                ),
+                                // Row 2: Header Filters For Every Column
+                                React.createElement("tr", { className: "bg-slate-700/95 border-t border-slate-600 font-normal" },
+                                    // 1. Sıra
+                                    React.createElement("th", { className: "p-1.5 text-center" },
+                                        hasActiveColumnFilters ? (
+                                            React.createElement("button", {
+                                                type: "button",
+                                                onClick: resetAllColumnFilters,
+                                                title: "Filtreleri Sıfırla",
+                                                className: "px-1.5 py-0.5 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold rounded cursor-pointer transition-colors"
+                                            }, "✕")
+                                        ) : (
+                                            React.createElement("span", { className: "text-slate-400 text-[10px]" }, "Filtre")
+                                        )
+                                    ),
+                                    // 2. Tanker Plakası Filtresi
+                                    React.createElement("th", { className: "p-1.5" },
+                                        React.createElement("input", {
+                                            type: "text",
+                                            placeholder: "Plaka ara...",
+                                            value: endSeasonColumnFilters.plate,
+                                            onChange: (e) => setEndSeasonColumnFilters(prev => ({ ...prev, plate: e.target.value })),
+                                            className: "w-full px-2 py-1 text-[11px] bg-slate-900 text-white placeholder-slate-400 border border-slate-600 rounded focus:ring-1 focus:ring-ogm-green-400 font-normal outline-none"
+                                        })
+                                    ),
+                                    // 3. Firma Bilgisi Filtresi (Çoklu Seçim Dropdown)
+                                    React.createElement("th", { className: "p-1.5" },
+                                        React.createElement("div", { className: "relative", ref: companyDropdownRef },
+                                            React.createElement("button", {
+                                                type: "button",
+                                                onClick: () => setIsCompanyDropdownOpen(!isCompanyDropdownOpen),
+                                                title: "Firma seçimi için tıklayın (Çoklu seçim yapılabilir)",
+                                                className: `w-full px-2 py-1 text-[11px] font-semibold rounded border flex items-center justify-between gap-1 transition-colors cursor-pointer ${
+                                                    endSeasonColumnFilters.companies && endSeasonColumnFilters.companies.length > 0
+                                                        ? "bg-amber-500 text-slate-950 border-amber-400 font-bold shadow-sm"
+                                                        : "bg-slate-900 text-white border-slate-600 hover:bg-slate-800"
+                                                }`
+                                            },
+                                                React.createElement("span", { className: "truncate max-w-[85px] text-left" },
+                                                    !endSeasonColumnFilters.companies || endSeasonColumnFilters.companies.length === 0
+                                                        ? "Tüm Firmalar"
+                                                        : endSeasonColumnFilters.companies.length === 1
+                                                        ? endSeasonColumnFilters.companies[0]
+                                                        : `${endSeasonColumnFilters.companies.length} Firma Seçili`
+                                                ),
+                                                React.createElement("span", { className: "text-[8px] opacity-80" }, isCompanyDropdownOpen ? "▲" : "▼")
+                                            ),
+                                            isCompanyDropdownOpen && React.createElement("div", {
+                                                className: "absolute top-full left-0 mt-1 w-60 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-2.5 z-50 text-white text-xs space-y-2 text-left"
+                                            },
+                                                // Firma arama kutusu
+                                                React.createElement("input", {
+                                                    type: "text",
+                                                    placeholder: "Firma ara...",
+                                                    value: companySearchFilter,
+                                                    onChange: (e) => setCompanySearchFilter(e.target.value),
+                                                    className: "w-full p-1.5 text-[11px] bg-slate-800 text-white placeholder-slate-400 border border-slate-700 rounded-lg focus:ring-1 focus:ring-amber-400 outline-none"
+                                                }),
+                                                // Hızlı eylemler
+                                                React.createElement("div", { className: "flex items-center justify-between gap-1 pb-1.5 border-b border-slate-800 text-[10px]" },
+                                                    React.createElement("button", {
+                                                        type: "button",
+                                                        onClick: () => {
+                                                            setEndSeasonColumnFilters(prev => ({
+                                                                ...prev,
+                                                                companies: [...uniqueTankerCompanies]
+                                                            }));
+                                                        },
+                                                        className: "text-amber-400 hover:text-amber-300 font-semibold cursor-pointer"
+                                                    }, "Tümünü Seç"),
+                                                    React.createElement("button", {
+                                                        type: "button",
+                                                        onClick: () => {
+                                                            setEndSeasonColumnFilters(prev => ({
+                                                                ...prev,
+                                                                companies: []
+                                                            }));
+                                                        },
+                                                        className: "text-rose-400 hover:text-rose-300 font-semibold cursor-pointer"
+                                                    }, "Temizle (Tümü)")
+                                                ),
+                                                // Firma listesi (checkbox)
+                                                React.createElement("div", { className: "max-h-48 overflow-y-auto space-y-1 pr-1" },
+                                                    uniqueTankerCompanies.length === 0 ? (
+                                                        React.createElement("p", { className: "text-slate-400 text-[11px] p-2 italic" }, "Seçilebilecek firma bulunamadı.")
+                                                    ) : (
+                                                        uniqueTankerCompanies
+                                                            .filter(comp => !companySearchFilter || comp.toLocaleLowerCase('tr-TR').includes(companySearchFilter.toLocaleLowerCase('tr-TR').trim()))
+                                                            .map(comp => {
+                                                                const isChecked = Boolean(endSeasonColumnFilters.companies && endSeasonColumnFilters.companies.includes(comp));
+                                                                const count = endSeasonTankerList.filter(t => t.company === comp).length;
+                                                                return React.createElement("label", {
+                                                                    key: comp,
+                                                                    className: `flex items-center justify-between gap-2 p-1.5 hover:bg-slate-800 rounded-lg cursor-pointer transition-colors ${isChecked ? "bg-slate-800/80" : ""}`
+                                                                },
+                                                                    React.createElement("div", { className: "flex items-center gap-2 truncate" },
+                                                                        React.createElement("input", {
+                                                                            type: "checkbox",
+                                                                            checked: isChecked,
+                                                                            onChange: () => {
+                                                                                setEndSeasonColumnFilters(prev => {
+                                                                                    const current = prev.companies || [];
+                                                                                    const next = current.includes(comp)
+                                                                                        ? current.filter(c => c !== comp)
+                                                                                        : [...current, comp];
+                                                                                    return { ...prev, companies: next };
+                                                                                });
+                                                                            },
+                                                                            className: "h-3.5 w-3.5 rounded border-slate-600 text-amber-500 focus:ring-amber-400 bg-slate-800 cursor-pointer"
+                                                                        }),
+                                                                        React.createElement("span", { className: `truncate text-[11px] ${isChecked ? "font-bold text-amber-300" : "text-slate-200"}` }, comp)
+                                                                    ),
+                                                                    React.createElement("span", { className: "text-[10px] px-1.5 py-0.5 bg-slate-800 text-slate-400 rounded-md font-mono" }, count)
+                                                                );
+                                                            })
+                                                    )
+                                                ),
+                                                React.createElement("div", { className: "pt-1 border-t border-slate-800 flex justify-between items-center" },
+                                                    React.createElement("span", { className: "text-[10px] text-slate-400 font-mono" },
+                                                        `${(endSeasonColumnFilters.companies || []).length} / ${uniqueTankerCompanies.length} seçili`
+                                                    ),
+                                                    React.createElement("button", {
+                                                        type: "button",
+                                                        onClick: () => setIsCompanyDropdownOpen(false),
+                                                        className: "px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-md text-[10px] font-bold cursor-pointer transition-colors"
+                                                    }, "Tamam")
+                                                )
+                                            )
+                                        )
+                                    ),
+                                    // 4. Kapasite Filtresi
+                                    React.createElement("th", { className: "p-1.5" },
+                                        React.createElement("input", {
+                                            type: "text",
+                                            placeholder: "Min kap...",
+                                            value: endSeasonColumnFilters.capacity,
+                                            onChange: (e) => setEndSeasonColumnFilters(prev => ({ ...prev, capacity: e.target.value })),
+                                            className: "w-full px-1.5 py-1 text-[11px] bg-slate-900 text-white placeholder-slate-400 border border-slate-600 rounded text-right focus:ring-1 focus:ring-ogm-green-400 font-normal outline-none"
+                                        })
+                                    ),
+                                    // 5. Giren Yakıt Filtresi
+                                    React.createElement("th", { className: "p-1.5" },
+                                        React.createElement("input", {
+                                            type: "text",
+                                            placeholder: "Min lt...",
+                                            value: endSeasonColumnFilters.totalIn,
+                                            onChange: (e) => setEndSeasonColumnFilters(prev => ({ ...prev, totalIn: e.target.value })),
+                                            className: "w-full px-1.5 py-1 text-[11px] bg-slate-900 text-white placeholder-slate-400 border border-slate-600 rounded text-right focus:ring-1 focus:ring-ogm-green-400 font-normal outline-none"
+                                        })
+                                    ),
+                                    // 5.5. Çıkan Transfer Filtresi
+                                    React.createElement("th", { className: "p-1.5" },
+                                        React.createElement("input", {
+                                            type: "text",
+                                            placeholder: "Min lt...",
+                                            value: endSeasonColumnFilters.outTransfer,
+                                            onChange: (e) => setEndSeasonColumnFilters(prev => ({ ...prev, outTransfer: e.target.value })),
+                                            className: "w-full px-1.5 py-1 text-[11px] bg-slate-900 text-white placeholder-slate-400 border border-slate-600 rounded text-right focus:ring-1 focus:ring-ogm-green-400 font-normal outline-none"
+                                        })
+                                    ),
+                                    // 6. Çıkan Hava Aracı Filtresi
+                                    React.createElement("th", { className: "p-1.5" },
+                                        React.createElement("input", {
+                                            type: "text",
+                                            placeholder: "Min lt...",
+                                            value: endSeasonColumnFilters.outAir,
+                                            onChange: (e) => setEndSeasonColumnFilters(prev => ({ ...prev, outAir: e.target.value })),
+                                            className: "w-full px-1.5 py-1 text-[11px] bg-slate-900 text-white placeholder-slate-400 border border-slate-600 rounded text-right focus:ring-1 focus:ring-ogm-green-400 font-normal outline-none"
+                                        })
+                                    ),
+                                    // 7. Çıkan Atık & Test Filtresi
+                                    React.createElement("th", { className: "p-1.5" },
+                                        React.createElement("input", {
+                                            type: "text",
+                                            placeholder: "Min lt...",
+                                            value: endSeasonColumnFilters.outWaste,
+                                            onChange: (e) => setEndSeasonColumnFilters(prev => ({ ...prev, outWaste: e.target.value })),
+                                            className: "w-full px-1.5 py-1 text-[11px] bg-slate-900 text-white placeholder-slate-400 border border-slate-600 rounded text-right focus:ring-1 focus:ring-ogm-green-400 font-normal outline-none"
+                                        })
+                                    ),
+                                    // 8. Tanker Mevcut Kalan Filtresi
+                                    React.createElement("th", { className: "p-1.5" },
+                                        React.createElement("select", {
+                                            value: endSeasonColumnFilters.remaining,
+                                            onChange: (e) => setEndSeasonColumnFilters(prev => ({ ...prev, remaining: e.target.value })),
+                                            className: "w-full px-1 py-1 text-[11px] bg-slate-900 text-white border border-slate-600 rounded focus:ring-1 focus:ring-ogm-green-400 font-normal outline-none"
+                                        },
+                                            React.createElement("option", { value: "all" }, "Tümü"),
+                                            React.createElement("option", { value: "positive" }, "Kalan > 0"),
+                                            React.createElement("option", { value: "negative" }, "Kalan < 0"),
+                                            React.createElement("option", { value: "zero" }, "Kalan = 0"),
+                                            React.createElement("option", { value: "nonzero" }, "Kalan ≠ 0")
+                                        )
+                                    ),
+                                    // 9. Reel Kalan Yakıt Filtresi
+                                    React.createElement("th", { className: "p-1.5" },
+                                        React.createElement("select", {
+                                            value: endSeasonColumnFilters.reel,
+                                            onChange: (e) => setEndSeasonColumnFilters(prev => ({ ...prev, reel: e.target.value })),
+                                            className: "w-full px-1 py-1 text-[11px] bg-slate-900 text-white border border-slate-600 rounded focus:ring-1 focus:ring-ogm-green-400 font-normal outline-none"
+                                        },
+                                            React.createElement("option", { value: "all" }, "Tümü"),
+                                            React.createElement("option", { value: "entered" }, "Girilmiş"),
+                                            React.createElement("option", { value: "empty" }, "Boş"),
+                                            React.createElement("option", { value: "with_diff" }, "Fark Olanlar")
+                                        )
+                                    ),
+                                    // 10. Detay Excel İndir Sütunu Filtresi
+                                    React.createElement("th", { className: "p-1.5 text-center" },
+                                        React.createElement("button", {
+                                            type: "button",
+                                            onClick: resetAllColumnFilters,
+                                            className: "w-full py-1 px-1 bg-slate-600 hover:bg-slate-500 text-slate-100 rounded text-[11px] font-semibold transition-colors cursor-pointer"
+                                        }, "Sıfırla")
+                                    )
+                                )
+                            ),
+                            React.createElement("tbody", { className: "divide-y divide-slate-100 bg-white" },
+                                filteredEndSeasonTankers.length === 0 ? (
+                                    React.createElement("tr", null,
+                                        React.createElement("td", { colSpan: 11, className: "p-8 text-center text-slate-500 italic" }, "Kriterlere uygun tanker kaydı bulunamadı.")
+                                    )
+                                ) : (
+                                    filteredEndSeasonTankers.map((t, idx) => {
+                                        const reelRaw = reelKalanValues[t.plate];
+                                        let diff = null;
+                                        if (reelRaw !== undefined && reelRaw !== null && reelRaw !== '') {
+                                            const p = parseFloat(String(reelRaw).replace(',', '.'));
+                                            if (!isNaN(p)) {
+                                                diff = p - t.remaining;
+                                            }
+                                        }
+
+                                        return React.createElement("tr", { key: t.plate, className: "hover:bg-slate-50/80 transition-colors" },
+                                            // 1. Sıra No
+                                            React.createElement("td", { className: "p-2.5 text-center text-slate-400 font-mono font-medium" }, idx + 1),
+                                            // 2. Tanker Plakası
+                                            React.createElement("td", { className: "p-2.5 font-bold font-mono text-slate-900" }, t.plate),
+                                            // 3. Firma Bilgisi (Tanker verisindeki gerçek firma)
+                                            React.createElement("td", { className: "p-2.5 text-slate-600 font-medium" },
+                                                React.createElement("span", { className: "px-2 py-0.5 bg-slate-100 rounded text-[11px] font-semibold text-slate-700" }, t.company || 'OGM')
+                                            ),
+                                            // 4. Kapasite
+                                            React.createElement("td", { className: "p-2.5 text-right font-medium text-slate-700" },
+                                                t.capacity ? `${t.capacity.toLocaleString('tr-TR')} lt` : '-'
+                                            ),
+                                            // 5. Toplam Giren Yakıt Miktarı (Tıklanabilir)
+                                            React.createElement("td", { className: "p-2 text-right" },
+                                                React.createElement("button", {
+                                                    type: "button",
+                                                    onClick: () => setEndSeasonDetailModal({
+                                                        tanker: t,
+                                                        type: 'giren',
+                                                        title: `${t.plate} - Toplam Giren Yakıt Dağılımı (Dolum & Transfer Girişi)`,
+                                                        items: t.incomingDetails
+                                                    }),
+                                                    title: "Giren yakıt detay dağılımını aç",
+                                                    className: "px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 hover:text-blue-900 font-bold rounded border border-blue-200 transition-colors cursor-pointer text-xs w-full text-right flex items-center justify-end gap-1.5"
+                                                },
+                                                    React.createElement("span", null, t.totalIn.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), " lt"),
+                                                    React.createElement("span", { className: "text-[10px] text-blue-400" }, "🔍")
+                                                )
+                                            ),
+                                            // 5.5. Toplam Çıkan Yakıt (Tankerden Tankere Transfer) (Tıklanabilir)
+                                            React.createElement("td", { className: "p-2 text-right" },
+                                                React.createElement("button", {
+                                                    type: "button",
+                                                    onClick: () => setEndSeasonDetailModal({
+                                                        tanker: t,
+                                                        type: 'transfer_cikis',
+                                                        title: `${t.plate} - Toplam Çıkan Yakıt (Tankerden Tankere Transfer) Dağılımı`,
+                                                        items: t.transferOutDetails
+                                                    }),
+                                                    title: "Transfer çıkış detay dağılımını aç",
+                                                    className: "px-2 py-1 bg-cyan-50 hover:bg-cyan-100 text-cyan-800 hover:text-cyan-950 font-bold rounded border border-cyan-200 transition-colors cursor-pointer text-xs w-full text-right flex items-center justify-end gap-1.5"
+                                                },
+                                                    React.createElement("span", null, t.totalTransferOut.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), " lt"),
+                                                    React.createElement("span", { className: "text-[10px] text-cyan-500" }, "🔍")
+                                                )
+                                            ),
+                                            // 6. Toplam Çıkan Yakıt Hava Aracı (Tıklanabilir)
+                                            React.createElement("td", { className: "p-2 text-right" },
+                                                React.createElement("button", {
+                                                    type: "button",
+                                                    onClick: () => setEndSeasonDetailModal({
+                                                        tanker: t,
+                                                        type: 'hava_araci',
+                                                        title: `${t.plate} - Hava Aracı Yakıt Çıkış Dağılımı (İkmal & Test Bakım)`,
+                                                        items: t.aircraftOutDetails
+                                                    }),
+                                                    title: "Hava aracı çıkış detay dağılımını aç",
+                                                    className: "px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 hover:text-emerald-950 font-bold rounded border border-emerald-200 transition-colors cursor-pointer text-xs w-full text-right flex items-center justify-end gap-1.5"
+                                                },
+                                                    React.createElement("span", null, t.totalOutAircraft.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), " lt"),
+                                                    React.createElement("span", { className: "text-[10px] text-emerald-500" }, "🔍")
+                                                )
+                                            ),
+                                            // 7. Toplam Çıkan Atık Yakıt ve Test Toplam (Tıklanabilir)
+                                            React.createElement("td", { className: "p-2 text-right" },
+                                                React.createElement("button", {
+                                                    type: "button",
+                                                    onClick: () => setEndSeasonDetailModal({
+                                                        tanker: t,
+                                                        type: 'atik_test',
+                                                        title: `${t.plate} - Atık Yakıt ve Şoför Test Çıkış Dağılımı`,
+                                                        items: t.wasteTestDetails
+                                                    }),
+                                                    title: "Atık ve test yakıt detay dağılımını aç",
+                                                    className: "px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 hover:text-amber-950 font-bold rounded border border-amber-200 transition-colors cursor-pointer text-xs w-full text-right flex items-center justify-end gap-1.5"
+                                                },
+                                                    React.createElement("span", null, t.totalWasteTest.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), " lt"),
+                                                    React.createElement("span", { className: "text-[10px] text-amber-500" }, "🔍")
+                                                )
+                                            ),
+                                            // 8. Tanker Mevcut Kalan (Tıklanabilir)
+                                            React.createElement("td", { className: "p-2 text-right" },
+                                                React.createElement("button", {
+                                                    type: "button",
+                                                    onClick: () => setEndSeasonDetailModal({
+                                                        tanker: t,
+                                                        type: 'mevcut_kalan',
+                                                        title: `${t.plate} - Mevcut Kalan Bakiye ve Tüm Hareketler`,
+                                                        items: t.allMovements
+                                                    }),
+                                                    title: "Tanker tüm hareket ve bakiye dağılımını aç",
+                                                    className: `px-2 py-1 font-bold rounded border transition-colors cursor-pointer text-xs w-full text-right flex items-center justify-end gap-1.5 ${t.remaining < 0 ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200' : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border-indigo-200'}`
+                                                },
+                                                    React.createElement("span", null, t.remaining.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), " lt"),
+                                                    React.createElement("span", { className: "text-[10px] text-indigo-400" }, "🔍")
+                                                )
+                                            ),
+                                            // 9. Reel Kalan Yakıt (Düzenlenebilir Input)
+                                            React.createElement("td", { className: "p-2 text-right" },
+                                                React.createElement("div", { className: "flex flex-col items-end" },
+                                                    React.createElement("input", {
+                                                        type: "text",
+                                                        placeholder: "0.00",
+                                                        value: reelKalanValues[t.plate] !== undefined ? reelKalanValues[t.plate] : '',
+                                                        onChange: (e) => handleReelKalanChange(t.plate, e.target.value),
+                                                        className: "w-28 p-1.5 text-right font-bold border border-slate-300 rounded-md bg-amber-50/50 focus:bg-white focus:border-amber-500 focus:ring-1 focus:ring-amber-500 text-xs shadow-inner"
+                                                    }),
+                                                    diff !== null && React.createElement("span", {
+                                                        className: `text-[10px] font-bold mt-0.5 ${Math.abs(diff) < 0.01 ? 'text-slate-500' : diff > 0 ? 'text-green-600' : 'text-red-600'}`
+                                                    }, `Fark: ${diff > 0 ? '+' : ''}${diff.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} lt`)
+                                                )
+                                            ),
+                                            // 10. En Son Sütun: Detay Excel İndir (Çıkan, Giren, Kalan, Mevcut tablosunu içeren Excel)
+                                            React.createElement("td", { className: "p-2 text-center" },
+                                                React.createElement("button", {
+                                                    type: "button",
+                                                    onClick: () => exportSingleTankerComprehensiveExcel(t),
+                                                    title: `${t.plate} için Giren, Çıkan, Mevcut Kalan ve tüm detayları Excel olarak indir`,
+                                                    className: "px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all hover:scale-[1.03] cursor-pointer whitespace-nowrap mx-auto"
+                                                },
+                                                    React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-3.5 w-3.5", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
+                                                        React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" })
+                                                    ),
+                                                    "Detay Excel İndir"
+                                                )
+                                            )
+                                        );
+                                    })
+                                )
+                            ),
+                            filteredEndSeasonTankers.length > 0 && React.createElement("tfoot", { className: "bg-slate-100 font-bold text-slate-900 sticky bottom-0 z-10 border-t-2 border-slate-300" },
+                                React.createElement("tr", null,
+                                    React.createElement("td", { colSpan: 3, className: "p-3 text-right font-bold text-slate-700" }, "GENEL TOPLAM:"),
+                                    React.createElement("td", { className: "p-3 text-right font-bold text-slate-800" }, endSeasonTotals.cap.toLocaleString('tr-TR'), " lt"),
+                                    React.createElement("td", { className: "p-3 text-right font-bold text-blue-900" }, endSeasonTotals.inVol.toLocaleString('tr-TR', { minimumFractionDigits: 2 }), " lt"),
+                                    React.createElement("td", { className: "p-3 text-right font-bold text-cyan-950" }, endSeasonTotals.outTransfer.toLocaleString('tr-TR', { minimumFractionDigits: 2 }), " lt"),
+                                    React.createElement("td", { className: "p-3 text-right font-bold text-emerald-950" }, endSeasonTotals.outAir.toLocaleString('tr-TR', { minimumFractionDigits: 2 }), " lt"),
+                                    React.createElement("td", { className: "p-3 text-right font-bold text-amber-950" }, endSeasonTotals.outWaste.toLocaleString('tr-TR', { minimumFractionDigits: 2 }), " lt"),
+                                    React.createElement("td", { className: "p-3 text-right font-bold text-indigo-950" }, endSeasonTotals.rem.toLocaleString('tr-TR', { minimumFractionDigits: 2 }), " lt"),
+                                    React.createElement("td", { className: "p-3 text-right font-bold text-purple-950" },
+                                        endSeasonTotals.hasAnyReel ? (
+                                            React.createElement("div", { className: "flex flex-col items-end" },
+                                                React.createElement("span", null, endSeasonTotals.reel.toLocaleString('tr-TR', { minimumFractionDigits: 2 }), " lt"),
+                                                React.createElement("span", { className: `text-[10px] ${endSeasonTotals.diff > 0 ? 'text-green-700' : 'text-red-700'}` },
+                                                    `Fark: ${endSeasonTotals.diff > 0 ? '+' : ''}${endSeasonTotals.diff.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} lt`
+                                                )
+                                            )
+                                        ) : '-'
+                                    ),
+                                    React.createElement("td", { className: "p-3 text-center text-slate-400" }, "-")
+                                )
+                            )
+                        )
+                    )
+                )
+            ),
+            // SEZON SONU DETAY DAĞILIMI PENCERESİ (5, 6, 7, 8. SÜTUNLAR İÇİN)
+            endSeasonDetailModal && React.createElement(Modal, {
+                isOpen: !!endSeasonDetailModal,
+                onClose: () => { setEndSeasonDetailModal(null); setDetailSearch(''); },
+                title: endSeasonDetailModal.title,
+                maxWidth: "1200px"
+            },
+                React.createElement("div", { className: "space-y-4 py-1" },
+                    // Detail Top Bar
+                    React.createElement("div", { className: "flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl" },
+                        React.createElement("div", { className: "flex items-center gap-2 flex-wrap" },
+                            React.createElement("span", { className: "px-3 py-1 bg-slate-800 text-white rounded-lg font-mono font-bold text-xs" }, endSeasonDetailModal.tanker?.plate || 'Tanker'),
+                            React.createElement("span", { className: "px-2.5 py-1 bg-slate-200 text-slate-700 rounded-lg font-semibold text-xs" }, endSeasonDetailModal.tanker?.company || 'OGM'),
+                            React.createElement("span", { className: "px-2.5 py-1 bg-blue-100 text-blue-800 rounded-lg font-bold text-xs" },
+                                `${endSeasonDetailModal.items.length} Kayıt`
+                            ),
+                            React.createElement("span", { className: "px-2.5 py-1 bg-green-100 text-green-800 rounded-lg font-bold text-xs" },
+                                `Toplam: ${endSeasonDetailModal.items.reduce((s, it) => s + (it.fuelAmountNum || parseFloat(String(it.fuelAmount).replace(',', '.')) || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} lt`
+                            )
+                        ),
+                        React.createElement("div", { className: "flex items-center gap-2" },
+                            React.createElement("input", {
+                                type: "text",
+                                placeholder: "Detay içinde ara...",
+                                value: detailSearch,
+                                onChange: (e) => setDetailSearch(e.target.value),
+                                className: "p-1.5 border border-slate-300 rounded-lg text-xs w-44 bg-white"
+                            }),
+                            React.createElement("button", {
+                                type: "button",
+                                onClick: exportEndSeasonDetailToExcel,
+                                className: "py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow cursor-pointer"
+                            },
+                                React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 },
+                                    React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" })
+                                ),
+                                "Excel İndir (.xls)"
+                            )
+                        )
+                    ),
+
+                    // Detail Records Table
+                    React.createElement("div", { className: "overflow-x-auto border border-slate-200 rounded-xl shadow-sm max-h-[460px] overflow-y-auto" },
+                        React.createElement("table", { className: "w-full text-xs text-left divide-y divide-slate-200" },
+                            React.createElement("thead", { className: "bg-slate-700 text-white font-bold sticky top-0 z-10" },
+                                React.createElement("tr", null,
+                                    React.createElement("th", { className: "p-2.5 text-center w-10" }, "#"),
+                                    React.createElement("th", { className: "p-2.5 text-left" }, "Tarih"),
+                                    React.createElement("th", { className: "p-2.5 text-left" }, "Kayıt No / ID"),
+                                    React.createElement("th", { className: "p-2.5 text-left" }, "Makbuz No"),
+                                    React.createElement("th", { className: "p-2.5 text-left" }, "İşlem / Hareket"),
+                                    React.createElement("th", { className: "p-2.5 text-left" }, "Hava Aracı / Meydan / Transfer"),
+                                    React.createElement("th", { className: "p-2.5 text-left" }, "Makbuz Tipi"),
+                                    React.createElement("th", { className: "p-2.5 text-right" }, "Yakıt Miktarı (lt)"),
+                                    React.createElement("th", { className: "p-2.5 text-left" }, "Personel / Yetkili"),
+                                    React.createElement("th", { className: "p-2.5 text-left" }, "Meslek"),
+                                    React.createElement("th", { className: "p-2.5 text-left" }, "Konum"),
+                                    React.createElement("th", { className: "p-2.5 text-center" }, "Makbuz Linki")
+                                )
+                            ),
+                            React.createElement("tbody", { className: "divide-y divide-slate-100 bg-white" },
+                                (() => {
+                                    const filteredItems = endSeasonDetailModal.items.filter(it => {
+                                        if (!detailSearch) return true;
+                                        const q = detailSearch.toLocaleLowerCase('tr-TR').trim();
+                                        const rNum = String(it.receiptNumber || '').toLocaleLowerCase('tr-TR');
+                                        const pName = String(it.personnelName || '').toLocaleLowerCase('tr-TR');
+                                        const tNum = String(it.tailNumber || '').toLocaleLowerCase('tr-TR');
+                                        const loc = String(it.location || '').toLocaleLowerCase('tr-TR');
+                                        const rType = String(it.receiptType || '').toLocaleLowerCase('tr-TR');
+                                        return rNum.includes(q) || pName.includes(q) || tNum.includes(q) || loc.includes(q) || rType.includes(q);
+                                    });
+
+                                    if (filteredItems.length === 0) {
+                                        return React.createElement("tr", null,
+                                            React.createElement("td", { colSpan: 12, className: "p-6 text-center text-slate-500 italic" }, "Kayıt bulunamadı.")
+                                        );
+                                    }
+
+                                    return filteredItems.map((it, idx) => {
+                                        const amount = it.fuelAmountNum || parseFloat(String(it.fuelAmount).replace(',', '.')) || 0;
+                                        const isOut = it.movementType === 'ÇIKIŞ';
+                                        const link = getReceiptLink(it);
+
+                                        return React.createElement("tr", { key: it.id || idx, className: "hover:bg-slate-50 transition-colors" },
+                                            React.createElement("td", { className: "p-2 text-center text-slate-400 font-mono" }, idx + 1),
+                                            React.createElement("td", { className: "p-2 whitespace-nowrap" }, it.date ? formatDisplayDateOnly(it.date) : '-'),
+                                            React.createElement("td", { className: "p-2 font-mono text-[11px] text-slate-500" }, it.kayitNumarasi ? formatDisplayDate(it.kayitNumarasi) : (it.id ? it.id.substring(0, 16) : '-')),
+                                            React.createElement("td", { className: "p-2 font-bold font-mono text-slate-800" }, it.receiptNumber || '-'),
+                                            React.createElement("td", { className: "p-2" },
+                                                React.createElement("span", {
+                                                    className: `px-2 py-0.5 rounded text-[11px] font-bold ${isOut ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-green-50 text-green-700 border border-green-200'}`
+                                                }, it.movementType || (it.recordType === 'tankerDolum' ? 'GİRİŞ' : 'ÇIKIŞ'))
+                                            ),
+                                            React.createElement("td", { className: "p-2 font-medium text-slate-800" }, it.detailDesc || it.tailNumber || it.location || '-'),
+                                            React.createElement("td", { className: "p-2 text-slate-600" }, getReceiptTypeDisplay(it.receiptType)),
+                                            React.createElement("td", { className: `p-2 text-right font-bold ${isOut ? 'text-red-600' : 'text-emerald-700'}` },
+                                                React.createElement("div", { className: "flex items-center justify-end gap-1.5 whitespace-nowrap" },
+                                                    React.createElement("span", null, `${isOut ? '-' : '+'}${amount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} lt`),
+                                                    React.createElement("button", {
+                                                        type: "button",
+                                                        onClick: () => handleOpenFuelAmountEdit(it),
+                                                        title: "Yakıt miktarını şifre ile düzenle",
+                                                        className: "px-1.5 py-0.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded font-semibold text-[10px] flex items-center gap-1 transition-colors cursor-pointer shadow-2xs hover:scale-105"
+                                                    },
+                                                        React.createElement("span", null, "✏️"),
+                                                        "Düzenle"
+                                                    )
+                                                )
+                                            ),
+                                            React.createElement("td", { className: "p-2 font-medium text-slate-700" }, it.personnelName || '-'),
+                                            React.createElement("td", { className: "p-2 text-slate-500" }, it.jobTitle || '-'),
+                                            React.createElement("td", { className: "p-2 text-slate-500" }, it.location || '-'),
+                                            React.createElement("td", { className: "p-2 text-center" },
+                                                link ? React.createElement("a", {
+                                                    href: link,
+                                                    target: "_blank",
+                                                    rel: "noopener noreferrer",
+                                                    className: "text-ogm-green-600 hover:text-ogm-green-800 hover:underline font-bold text-[11px]"
+                                                }, "Makbuza Git ↗") : '-'
+                                            )
+                                        );
+                                    });
+                                })()
+                            ),
+                            React.createElement("tfoot", { className: "bg-slate-100 font-bold sticky bottom-0 z-10 border-t border-slate-300" },
+                                React.createElement("tr", null,
+                                    React.createElement("td", { colSpan: 7, className: "p-2.5 text-right font-bold text-slate-700" }, "TOPLAM:"),
+                                    React.createElement("td", { className: "p-2.5 text-right font-bold text-slate-900" },
+                                        `${endSeasonDetailModal.items.reduce((s, it) => s + (it.fuelAmountNum || parseFloat(String(it.fuelAmount).replace(',', '.')) || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} lt`
+                                    ),
+                                    React.createElement("td", { colSpan: 4 }, "")
+                                )
+                            )
+                        )
+                    )
+                )
+            ),
+       
+            // ŞİFRE İLE YAKIT MİKTARI DÜZENLEME MODALI
+            editingFuelMovement && React.createElement(Modal, {
+                isOpen: !!editingFuelMovement,
+                onClose: () => { if (!isSavingFuelAmount) setEditingFuelMovement(null); },
+                title: "Yakıt Miktarını Şifre İle Düzenle"
+            },
+                React.createElement("div", { className: "space-y-4 py-1 text-xs" },
+                    React.createElement("div", { className: "p-3 bg-amber-50/90 border border-amber-300 rounded-xl space-y-2 text-amber-950" },
+                        React.createElement("div", { className: "flex items-center gap-2 font-bold text-sm text-amber-900" },
+                            React.createElement("span", { className: "text-base" }, "🔒"),
+                            "Güvenli Yakıt Miktarı Güncelleme"
+                        ),
+                        React.createElement("p", { className: "text-xs leading-relaxed" },
+                            "Bu işlem hem sistemdeki toplam ve bakiye değerlerini hem de Google E-Tablo ve Excel dökümlerindeki kaydı anlık olarak güncelleyecektir. İşlemi onaylamak için yönetici şifresini giriniz."
+                        )
+                    ),
+                    React.createElement("div", { className: "bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5" },
+                        React.createElement("div", { className: "flex justify-between" },
+                            React.createElement("span", { className: "text-slate-500 font-medium" }, "Makbuz Numarası:"),
+                            React.createElement("span", { className: "font-mono font-bold text-slate-800" }, editingFuelMovement.receiptNumber || '-')
+                        ),
+                        React.createElement("div", { className: "flex justify-between" },
+                            React.createElement("span", { className: "text-slate-500 font-medium" }, "Kayıt / ID:"),
+                            React.createElement("span", { className: "font-mono text-slate-700" }, editingFuelMovement.kayitNumarasi || editingFuelMovement.id || '-')
+                        ),
+                        React.createElement("div", { className: "flex justify-between" },
+                            React.createElement("span", { className: "text-slate-500 font-medium" }, "Hareket Türü:"),
+                            React.createElement("span", { className: "font-bold text-slate-800" }, editingFuelMovement.movementType || editingFuelMovement.subType || '-')
+                        ),
+                        React.createElement("div", { className: "flex justify-between" },
+                            React.createElement("span", { className: "text-slate-500 font-medium" }, "Mevcut Miktar:"),
+                            React.createElement("span", { className: "font-bold text-slate-900 font-mono" }, `${(editingFuelMovement.fuelAmountNum || parseFloat(String(editingFuelMovement.fuelAmount).replace(',', '.')) || 0).toLocaleString('tr-TR')} lt`)
+                        )
+                    ),
+                    React.createElement("div", { className: "space-y-3 pt-1" },
+                        React.createElement("div", { className: "flex flex-col gap-1" },
+                            React.createElement("label", { className: "font-bold text-slate-700" }, "Yeni Yakıt Miktarı (lt):"),
+                            React.createElement("input", {
+                                type: "number",
+                                step: "any",
+                                value: editFuelNewAmount,
+                                onChange: (e) => setEditFuelNewAmount(e.target.value),
+                                placeholder: "Örn: 2500",
+                                className: "w-full p-2.5 border border-slate-300 rounded-lg font-bold text-sm bg-white focus:ring-2 focus:ring-ogm-green-500 focus:border-ogm-green-500 outline-none"
+                            })
+                        ),
+                        React.createElement("div", { className: "flex flex-col gap-1" },
+                            React.createElement("label", { className: "font-bold text-slate-700" }, "Yönetici Şifresi:"),
+                            React.createElement("input", {
+                                type: "password",
+                                value: editFuelPassword,
+                                onChange: (e) => setEditFuelPassword(e.target.value),
+                                placeholder: "Yönetici şifrenizi giriniz",
+                                className: "w-full p-2.5 border border-slate-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-ogm-green-500 focus:border-ogm-green-500 outline-none"
+                            })
+                        ),
+                        editFuelError && React.createElement("div", { className: "p-2 bg-red-50 border border-red-200 text-red-700 font-semibold rounded-lg text-xs" },
+                            editFuelError
+                        )
+                    ),
+                    React.createElement("div", { className: "flex justify-end gap-2 pt-3 border-t border-slate-200" },
+                        React.createElement("button", {
+                            type: "button",
+                            onClick: () => setEditingFuelMovement(null),
+                            disabled: isSavingFuelAmount,
+                            className: "py-2 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold text-xs cursor-pointer transition-colors"
+                        }, "İptal"),
+                        React.createElement("button", {
+                            type: "button",
+                            onClick: handleSaveFuelAmountWithPassword,
+                            disabled: isSavingFuelAmount,
+                            className: "py-2 px-5 bg-ogm-green-600 hover:bg-ogm-green-700 text-white rounded-lg font-bold text-xs shadow-md cursor-pointer transition-all hover:scale-102 disabled:bg-slate-400"
+                        }, isSavingFuelAmount ? "Güncelleniyor..." : "Şifre İle Onayla ve Güncelle")
+                    )
+                )
             )
         )
     );
 };
+
 
 const TankerTakip = ({ tankerData, fuelRecords, ogmRecords = [], showMessage }) => {
     const [selectedPlate, setSelectedPlate] = useState('');
@@ -5549,7 +7805,7 @@ const AdminPanel = (props) => {
             ),
             React.createElement("main", { className: "flex-1" },
                 activeModule === 'dataEntry' && React.createElement(DataEntryModule, null),
-                activeModule === 'receipts' && React.createElement(RecordManagement, { fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, onUpdateFuelRecords: props.updateFuelRecords, onUpdateSingleRecord: props.onUpdateSingleRecord, aircraftData: props.aircraftData, tankerData: props.tankerData, airportList: props.airportList, showMessage: props.showMessage, onDeleteRecord: props.onDeleteRecord, undoBuffer: props.undoBuffer, setUndoBuffer: props.setUndoBuffer, conflictData: props.conflictData, setConflictData: props.setConflictData, personnelList: props.personnelList, currentUser: props.currentUser }),
+                activeModule === 'receipts' && React.createElement(RecordManagement, { fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, onUpdateFuelRecords: props.updateFuelRecords, onUpdateSingleRecord: props.onUpdateSingleRecord, aircraftData: props.aircraftData, tankerData: props.tankerData, airportList: props.airportList, showMessage: props.showMessage, onDeleteRecord: props.onDeleteRecord, undoBuffer: props.undoBuffer, setUndoBuffer: props.setUndoBuffer, conflictData: props.conflictData, setConflictData: props.setConflictData, personnelList: props.personnelList, currentUser: props.currentUser, adminCredentials: props.adminCredentials }),
                 activeModule === 'tankerTracking' && React.createElement(TankerTakip, { tankerData: props.tankerData, fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, showMessage: props.showMessage }),
                 activeModule === 'regionReceiptTracking' && React.createElement(RegionReceiptTracking, { tankerData: props.tankerData, fuelRecords: props.fuelRecords, ogmRecords: props.ogmRecords, receiptBooks: props.receiptBooks, showMessage: props.showMessage, handleAddRecord: props.handleAddRecord, updateFuelRecords: props.updateFuelRecords, onStartRedirection: props.onStartRedirection }),
                 activeModule === 'approval' && React.createElement(ApprovalRequestsComponent, { approvalRequests: props.approvalRequests, personnelApprovalRequests: props.personnelApprovalRequests, bookDeletionRequests: props.bookDeletionRequests, onApproveBookDeletion: props.onApproveBookDeletion, onRejectBookDeletion: props.onRejectBookDeletion, onHandleEditApproval: props.handleEditApproval, onHandlePersonnelApproval: props.handlePersonnelApproval, showMessage: props.showMessage, fuelRecords: props.fuelRecords, onDeleteRecord: props.onDeleteRecord, dismissedDuplicateKeys: props.dismissedDuplicateKeys, onDismissDuplicate: props.onDismissDuplicate }),
@@ -5697,53 +7953,86 @@ const App = () => {
         }, 2000);
     };
 
-    const postData = async (action, payload) => {
-        setIsProcessing(true);
+    const postData = async (action, payload, retries = 1) => {
+        const isReadAction = action && (action.startsWith('onGet') || action.startsWith('get'));
+        if (!isReadAction) {
+            setIsProcessing(true);
+        }
         try {
             const requestBody = { action, payload };
-            const res = await fetch(SCRIPT_URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'text/plain;charset=utf-8',
-                },
-                body: JSON.stringify(requestBody)
-            });
-
-            const responseText = await res.text();
+            let responseText = '';
+            let res;
+            
+            for (let attempt = 0; attempt <= retries; attempt++) {
+                try {
+                    res = await fetch(SCRIPT_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'text/plain;charset=utf-8',
+                        },
+                        body: JSON.stringify(requestBody)
+                    });
+                    responseText = await res.text();
+                    if (responseText && !responseText.trim().startsWith('<')) {
+                        break;
+                    }
+                    if (attempt < retries) {
+                        await new Promise(r => setTimeout(r, 800));
+                    }
+                } catch (fetchErr) {
+                    if (attempt >= retries) throw fetchErr;
+                    await new Promise(r => setTimeout(r, 800));
+                }
+            }
 
             let result;
             try {
                 if (!responseText || responseText.trim().startsWith('<')) {
+                    if (isReadAction) {
+                        console.warn(`postData('${action}') sunucudan beklenmeyen HTML veya boş yanıt aldı, boş veriyle devam ediliyor.`);
+                        return { status: 'success', success: true, data: [] };
+                    }
                     throw new Error('Sunucu HTML hata sayfası veya erişim engeli döndürdü (404/Yetkisiz).');
                 }
                 result = JSON.parse(responseText);
             } catch (jsonError) {
+                if (isReadAction) {
+                    console.warn(`postData('${action}') JSON ayrıştırma uyarısı, boş veriyle devam ediliyor:`, jsonError.message);
+                    return { status: 'success', success: true, data: [] };
+                }
                 console.warn('Failed to parse JSON response:', responseText.substring(0, 150));
-                throw new Error(jsonError.message.includes('HTML') ? jsonError.message : `Sunucudan geçersiz veya boş bir yanıt alındı. HTTP Durumu: ${res.status}`);
+                throw new Error(jsonError.message.includes('HTML') ? jsonError.message : `Sunucudan geçersiz veya boş bir yanıt alındı. HTTP Durumu: ${res ? res.status : 'Bilinmiyor'}`);
             }
 
-            if (result.status !== 'success' && result.success !== true) {
-                 if (result.success === false && (action.includes('ApproveRequest') || action.includes('RejectRequest'))) {
-                     showMessage(result.message || 'İşlem tamamlanamadı ama veri yenilendi.', 'error');
-                     return result;
+            if (result.status !== 'success' && result.success !== true) { 
+                 if (result.success === false && (action.includes('ApproveRequest') || action.includes('RejectRequest'))) { 
+                     showMessage(result.message || 'İşlem tamamlanamadı ama veri yenilendi.', 'error'); 
+                     return result; 
+                 } 
+                 if (isReadAction) {
+                     console.warn(`postData('${action}') veri döndürmedi, boş listeyle devam ediliyor:`, result.message);
+                     return { status: 'success', success: true, data: [] };
                  }
                  throw new Error(result.message || 'Komut dosyası tarafında bilinmeyen bir hata oluştu.');
             }
             return result;
-
         } catch (error) {
+            if (isReadAction) {
+                console.warn(`"postData" uyarısı (eylem: "${action}"):`, error.message);
+                return { status: 'success', success: true, data: [] };
+            }
             console.error(`"postData" hatası (eylem: "${action}"):`, error);
             if (error.message && (error.message.includes('SPREADSHEET_ID') || error.message.includes('E-Tablo Açılamadı'))) {
             } else if (error.message.includes('Failed to fetch')) {
-                if (!action.startsWith('onGet')) {
-                    showMessage('Ağ Hatası: Sunucuya ulaşılamadı. Lütfen internet bağlantınızı kontrol edin.', 'error');
-                }
-            } else if (!action.startsWith('onGet')) {
+                showMessage('Ağ Hatası: Sunucuya ulaşılamadı. Lütfen internet bağlantınızı kontrol edin.', 'error');
+            } else {
                 showMessage(`İşlem Başarısız: ${error.message}`, 'error');
             }
             throw error;
         } finally {
-            setIsProcessing(false);
+            if (!isReadAction) {
+                setIsProcessing(false);
+            }
         }
     };
 
@@ -5923,23 +8212,14 @@ const App = () => {
                 };
 
                 let panelDataError = null;
+                // Birincil verileri yükle (onGetAdminPanelData ve OGM uçak verileri)
                 const [
                     panelDataResult,
-                    approvalRequestsResult,
-                    personnelApprovalRequestsResult,
                     ogmJson
                 ] = await Promise.all([
                     postData('onGetAdminPanelData', null).catch(err => {
                         console.warn("Google Apps Script 'onGetAdminPanelData' ulaşılamadı veya hata döndü:", err);
                         panelDataError = err;
-                        return null;
-                    }),
-                    postData('onGetApprovalRequests', null).catch(err => {
-                        console.warn("Google Apps Script 'onGetApprovalRequests' ulaşılamadı veya hata döndü:", err);
-                        return null;
-                    }),
-                    postData('onGetPersonnelApprovalRequests', null).catch(err => {
-                        console.warn("Google Apps Script 'onGetPersonnelApprovalRequests' ulaşılamadı veya hata döndü:", err);
                         return null;
                     }),
                     fetchOgmData().catch(err => {
@@ -5969,13 +8249,14 @@ const App = () => {
                 setAirportList(typedAirports.length > 0 ? typedAirports : INITIAL_AIRPORT_LIST);
                 setReceiptBooks(panelData.receiptBooks || []);
 
-                if (approvalRequestsResult && approvalRequestsResult.data) {
-                    setApprovalRequests(normalizeApprovals(approvalRequestsResult.data));
-                }
+                // Talep onay listelerini arka planda sırayla yükle (Google Apps Script kilit çakışmasını önler)
+                postData('onGetApprovalRequests', null).then(res => {
+                    if (res && res.data) setApprovalRequests(normalizeApprovals(res.data));
+                }).catch(() => {});
 
-                if (personnelApprovalRequestsResult && personnelApprovalRequestsResult.data) {
-                    setPersonnelApprovalRequests(personnelApprovalRequestsResult.data || []);
-                }
+                postData('onGetPersonnelApprovalRequests', null).then(res => {
+                    if (res && res.data) setPersonnelApprovalRequests(res.data || []);
+                }).catch(() => {});
 
                 if (ogmJson) {
                     let rawOgmRecords = null;
@@ -6073,33 +8354,34 @@ const App = () => {
         const recordsToDelete = fuelRecords.filter(r => targetIdsSet.has(r.id));
         if (recordsToDelete.length === 0) return;
 
-        // 1. Instant optimistic state update (< 5ms)
+        // Seçilmeyen, korunması ZORUNLU olan kayıtları belirle
+        let preservedRecords = [];
+        if (dupContext && dupContext.records && dupContext.records.length > 0) {
+            preservedRecords = dupContext.records.filter(r => !targetIdsSet.has(r.id));
+        }
+
+        // 1. Arayüzde anında silme (optimistik güncelleme)
         setFuelRecords(prev => prev.filter(r => !targetIdsSet.has(r.id)));
 
-        // 2. Fast background sync (non-blocking, fire-and-forget)
-        for (const rec of recordsToDelete) {
-            let occurrenceIdx = rec.occurrenceIndex || null;
-            if (!occurrenceIdx && dupContext && dupContext.records) {
-                const foundIdx = dupContext.records.findIndex(x => x.id === rec.id);
-                if (foundIdx !== -1) occurrenceIdx = foundIdx + 1;
+        // 2. Google E-Tabloya TEK BİR ATOMİK İSTEK gönder (Satır kaymalarını ve yanlış silmeleri önler)
+        const batchPayload = {
+            requestId: `del-batch-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            receiptNumber: dupContext?.receiptNumber || recordsToDelete[0]?.receiptNumber || null,
+            recordsToDelete: recordsToDelete.map(deNormalizeRecord),
+            records: recordsToDelete.map(deNormalizeRecord),
+            preservedRecords: preservedRecords.map(deNormalizeRecord),
+            keepRecords: preservedRecords.map(deNormalizeRecord),
+            ids: Array.from(targetIdsSet)
+        };
+
+        try {
+            await postData('onDeleteMultipleFuelRecords', batchPayload);
+        } catch (e1) {
+            try {
+                await postData('onDeleteFuelRecord', batchPayload);
+            } catch (e2) {
+                console.warn("Targeted row delete sync warning:", e2);
             }
-
-            const deletePayload = {
-                requestId: `del-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-                id: rec.id,
-                kayitNumarasi: rec.kayitNumarasi,
-                receiptNumber: rec.receiptNumber,
-                rowIndex: rec._sheetRowIndex || null,
-                occurrenceIndex: occurrenceIdx,
-                record: deNormalizeRecord(rec),
-                originalRecord: deNormalizeRecord(rec)
-            };
-
-            postData('onDeleteFuelRecord', deletePayload).catch(e1 => {
-                postData('onDeleteRecord', deletePayload).catch(e2 => {
-                    console.warn("Background targeted row delete sync error:", e2);
-                });
-            });
         }
     };
 
