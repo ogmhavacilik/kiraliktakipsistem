@@ -3332,6 +3332,24 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, onUpda
     };
     const [endSeasonDetailModal, setEndSeasonDetailModal] = useState(null);
     const [detailSearch, setDetailSearch] = useState('');
+    const [capacityWarningModal, setCapacityWarningModal] = useState(null);
+
+    const handleMevcutKalanClick = (t) => {
+        const isOverCapacity = t.capacity > 0 && t.remaining > t.capacity;
+        if (isOverCapacity) {
+            setCapacityWarningModal({
+                tanker: t,
+                excessAmount: t.remaining - t.capacity
+            });
+        } else {
+            setEndSeasonDetailModal({
+                tanker: t,
+                type: 'mevcut_kalan',
+                title: `${t.plate} - Mevcut Kalan Bakiye ve Tüm Hareketler`,
+                items: t.allMovements
+            });
+        }
+    };
     const [analysisTanker, setAnalysisTanker] = useState('');
     const [analysisDolumId, setAnalysisDolumId] = useState('');
     const [analysisData, setAnalysisData] = useState(null);
@@ -5932,23 +5950,28 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, onUpda
                                                     React.createElement("span", { className: "text-[10px] text-amber-500" }, "🔍")
                                                 )
                                             ),
-                                            // 8. Tanker Mevcut Kalan (Tıklanabilir)
-                                            React.createElement("td", { className: "p-2 text-right" },
-                                                React.createElement("button", {
-                                                    type: "button",
-                                                    onClick: () => setEndSeasonDetailModal({
-                                                        tanker: t,
-                                                        type: 'mevcut_kalan',
-                                                        title: `${t.plate} - Mevcut Kalan Bakiye ve Tüm Hareketler`,
-                                                        items: t.allMovements
-                                                    }),
-                                                    title: "Tanker tüm hareket ve bakiye dağılımını aç",
-                                                    className: `px-2 py-1 font-bold rounded border transition-colors cursor-pointer text-xs w-full text-right flex items-center justify-end gap-1.5 ${t.remaining < 0 ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200' : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border-indigo-200'}`
-                                                },
-                                                    React.createElement("span", null, t.remaining.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), " lt"),
-                                                    React.createElement("span", { className: "text-[10px] text-indigo-400" }, "🔍")
-                                                )
-                                            ),
+                                            // 8. Tanker Mevcut Kalan (Tıklanabilir - Kapasite Fazlası Durumunda Turuncu İkaz Yanıp Söner)
+                                            (() => {
+                                                const isOverCapacity = t.capacity > 0 && t.remaining > t.capacity;
+                                                return React.createElement("td", { className: "p-2 text-right" },
+                                                    React.createElement("button", {
+                                                        type: "button",
+                                                        onClick: () => handleMevcutKalanClick(t),
+                                                        title: isOverCapacity ? `⚠️ DİKKAT: Burada kapasite dışı yakıt miktarı kalmıştır! (+${(t.remaining - t.capacity).toLocaleString('tr-TR')} lt fazla)` : "Tanker tüm hareket ve bakiye dağılımını aç",
+                                                        className: `px-2 py-1 font-bold rounded border transition-all cursor-pointer text-xs w-full text-right flex items-center justify-end gap-1.5 ${
+                                                            isOverCapacity
+                                                                ? 'blink-orange text-white border-orange-600 shadow-lg font-black scale-102 ring-2 ring-orange-400'
+                                                                : t.remaining < 0
+                                                                    ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
+                                                                    : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border-indigo-200'
+                                                        }`
+                                                    },
+                                                        isOverCapacity && React.createElement("span", { className: "text-xs font-black animate-bounce mr-0.5" }, "⚠️"),
+                                                        React.createElement("span", null, t.remaining.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), " lt"),
+                                                        React.createElement("span", { className: `text-[10px] ${isOverCapacity ? 'text-white' : 'text-indigo-400'}` }, "🔍")
+                                                    )
+                                                );
+                                            })(),
                                             // 9. Reel Kalan Yakıt (Düzenlenebilir Input)
                                             React.createElement("td", { className: "p-2 text-right" },
                                                 React.createElement("div", { className: "flex flex-col items-end" },
@@ -6008,6 +6031,78 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, onUpda
                     )
                 )
             ),
+            // KAPASİTE DIŞI YAKIT İKAZ VE UYARI PENCERESİ (İLK POP-UP)
+            capacityWarningModal && React.createElement(Modal, {
+                isOpen: !!capacityWarningModal,
+                onClose: () => setCapacityWarningModal(null),
+                title: "⚠️ KAPASİTE DIŞI YAKIT UYARISI",
+                maxWidth: "680px"
+            },
+                React.createElement("div", { className: "space-y-4 py-2" },
+                    React.createElement("div", { className: "p-4 bg-orange-50 border-2 border-orange-400 rounded-2xl flex items-start gap-3 shadow-md" },
+                        React.createElement("div", { className: "p-2.5 bg-orange-500 text-white rounded-full flex-shrink-0 animate-bounce shadow-sm" },
+                            React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-7 w-7", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2.5 },
+                                React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" })
+                            )
+                        ),
+                        React.createElement("div", { className: "space-y-1.5" },
+                            React.createElement("h4", { className: "text-base font-black text-orange-950 uppercase tracking-wide" },
+                                "burada kapasite dışı yakıt miktarı kalmıştır."
+                            ),
+                            React.createElement("p", { className: "text-xs text-orange-900 leading-relaxed font-medium" },
+                                "Bu tankerin sistemdeki mevcut kalan bakiyesi, tanımlı tank kapasitesinden fazladır. Giriş (meydan dolumu ve transfer) kayıtları ile çıkış makbuzlarını inceleyebilirsiniz."
+                            )
+                        )
+                    ),
+                    React.createElement("div", { className: "bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2.5 text-xs shadow-inner" },
+                        React.createElement("div", { className: "flex justify-between items-center py-1 border-b border-slate-200" },
+                            React.createElement("span", { className: "text-slate-600 font-semibold" }, "Tanker Plakası:"),
+                            React.createElement("span", { className: "font-mono font-black text-slate-900 text-sm" }, capacityWarningModal.tanker?.plate)
+                        ),
+                        React.createElement("div", { className: "flex justify-between items-center py-1 border-b border-slate-200" },
+                            React.createElement("span", { className: "text-slate-600 font-semibold" }, "Firma / Bölge:"),
+                            React.createElement("span", { className: "font-bold text-slate-800" }, `${capacityWarningModal.tanker?.company || 'OGM'} - ${capacityWarningModal.tanker?.region || '-'}`)
+                        ),
+                        React.createElement("div", { className: "flex justify-between items-center py-1 border-b border-slate-200" },
+                            React.createElement("span", { className: "text-slate-600 font-semibold" }, "Tanımlı Tanker Kapasitesi:"),
+                            React.createElement("span", { className: "font-mono font-bold text-slate-800 text-sm" }, `${(capacityWarningModal.tanker?.capacity || 0).toLocaleString('tr-TR')} lt`)
+                        ),
+                        React.createElement("div", { className: "flex justify-between items-center py-1 border-b border-slate-200" },
+                            React.createElement("span", { className: "text-slate-600 font-semibold" }, "Sistemdeki Mevcut Kalan:"),
+                            React.createElement("span", { className: "font-mono font-black text-orange-700 text-base" }, `${(capacityWarningModal.tanker?.remaining || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} lt`)
+                        ),
+                        React.createElement("div", { className: "flex justify-between items-center py-2 px-3 bg-orange-100/90 border border-orange-300 rounded-xl mt-1" },
+                            React.createElement("span", { className: "text-orange-950 font-black text-xs" }, "Kapasiteyi Aşan Fazla Miktar:"),
+                            React.createElement("span", { className: "font-mono font-black text-orange-900 text-base" }, `+${capacityWarningModal.excessAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} lt`)
+                        )
+                    ),
+                    React.createElement("div", { className: "flex justify-end gap-2.5 pt-3 border-t border-slate-200" },
+                        React.createElement("button", {
+                            type: "button",
+                            onClick: () => setCapacityWarningModal(null),
+                            className: "py-2.5 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs cursor-pointer transition-colors"
+                        }, "Kapat"),
+                        React.createElement("button", {
+                            type: "button",
+                            onClick: () => {
+                                const t = capacityWarningModal.tanker;
+                                setCapacityWarningModal(null);
+                                setEndSeasonDetailModal({
+                                    tanker: t,
+                                    type: 'mevcut_kalan',
+                                    title: `${t.plate} - Mevcut Kalan Bakiye ve Tüm Hareketler (Kapasite Aşımı Uyarısı)`,
+                                    items: t.allMovements
+                                });
+                            },
+                            className: "py-2.5 px-6 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-xl font-bold text-xs shadow-md cursor-pointer transition-all hover:scale-102 flex items-center gap-1.5"
+                        },
+                            React.createElement("span", null, "🔍"),
+                            "Tüm Hareketleri ve Bakiye Detayını Aç"
+                        )
+                    )
+                )
+            ),
+
             // SEZON SONU DETAY DAĞILIMI PENCERESİ (5, 6, 7, 8. SÜTUNLAR İÇİN)
             endSeasonDetailModal && React.createElement(Modal, {
                 isOpen: !!endSeasonDetailModal,
@@ -6016,6 +6111,11 @@ const RecordManagement = ({ fuelRecords, ogmRecords, onUpdateFuelRecords, onUpda
                 maxWidth: "1200px"
             },
                 React.createElement("div", { className: "space-y-4 py-1" },
+                    // Kapasite Fazlası Uyarısı Banner'ı
+                    endSeasonDetailModal.tanker?.capacity > 0 && endSeasonDetailModal.tanker?.remaining > endSeasonDetailModal.tanker?.capacity && React.createElement("div", { className: "p-3 bg-orange-100 border border-orange-300 rounded-xl text-orange-950 flex items-center gap-2.5 font-bold text-xs shadow-xs" },
+                        React.createElement("span", { className: "text-base" }, "⚠️"),
+                        React.createElement("span", null, `Kapasite Dışı Yakıt Uyarısı: Bu tankerde kapasite fazlası (+${(endSeasonDetailModal.tanker.remaining - endSeasonDetailModal.tanker.capacity).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} lt) yakıt bulunmaktadır. Kapasite: ${endSeasonDetailModal.tanker.capacity.toLocaleString('tr-TR')} lt | Mevcut Kalan: ${endSeasonDetailModal.tanker.remaining.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} lt`)
+                    ),
                     // Detail Top Bar
                     React.createElement("div", { className: "flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl" },
                         React.createElement("div", { className: "flex items-center gap-2 flex-wrap" },
@@ -6398,10 +6498,25 @@ const TankerTakip = ({ tankerData, fuelRecords, ogmRecords = [], showMessage }) 
                                 ),
                                 React.createElement("p", { className: "text-[11px] text-orange-600 mt-1" }, "Şoför tahliyeleri, temizlik ve atık yakıt tankı çıkışları dahildir.")
                             ),
-                            React.createElement("div", { className: "p-3 bg-ogm-green-50 rounded-md border border-ogm-green-200 text-ogm-green-800 font-bold text-lg" },
-                                React.createElement("strong", null, "Mevcut Yakıt Miktarı: "), 
-                                report.remaining.toLocaleString('tr-TR'), " lt"
-                            ),
+                            (() => {
+                                const isOver = report.capacity > 0 && report.remaining > report.capacity;
+                                return React.createElement(React.Fragment, null,
+                                    isOver && React.createElement("div", { className: "p-3 bg-orange-100 border-2 border-orange-400 rounded-xl text-orange-950 font-bold text-xs flex items-center gap-2.5 shadow-sm mb-2" },
+                                        React.createElement("span", { className: "text-lg animate-bounce" }, "⚠️"),
+                                        React.createElement("div", null,
+                                            React.createElement("p", { className: "font-black text-orange-900 uppercase text-xs" }, "burada kapasite dışı yakıt miktarı kalmıştır."),
+                                            React.createElement("p", { className: "text-[11px] text-orange-800 font-normal mt-0.5" }, `Kapasite: ${report.capacity.toLocaleString('tr-TR')} lt | Aşan Fazlalık: +${(report.remaining - report.capacity).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} lt`)
+                                        )
+                                    ),
+                                    React.createElement("div", { className: `p-3 rounded-md border font-bold text-lg flex items-center justify-between ${isOver ? 'blink-orange text-white border-orange-600 shadow-md font-black' : 'bg-ogm-green-50 border-ogm-green-200 text-ogm-green-800'}` },
+                                        React.createElement("div", null,
+                                            React.createElement("strong", null, "Mevcut Yakıt Miktarı: "),
+                                            report.remaining.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), " lt"
+                                        ),
+                                        isOver && React.createElement("span", { className: "text-xs bg-white/20 px-2 py-0.5 rounded font-black text-white" }, "⚠️ KAPASİTE AŞIMI")
+                                    )
+                                );
+                            })(),
                             React.createElement("div", { className: "pt-1" },
                                 React.createElement("label", { className: "font-semibold text-slate-600 mb-1 block text-xs" }, "Depo Doluluk Oranı"),
                                 React.createElement("div", { className: "w-full bg-slate-200 rounded-full h-8" },
